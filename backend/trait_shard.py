@@ -7,9 +7,9 @@ amounts of 1 or 2 per run. This is much simpler and more reliable than
 reading the number with text recognition, which could occasionally
 misread a digit and add the wrong amount.
 
-To set this up, capture two pictures:
-    python capture_icons.py trait_shard_x1
-    python capture_icons.py trait_shard_x2
+To set this up, capture two pictures (from the repo root):
+    python backend/capture_icons.py trait_shard_x1
+    python backend/capture_icons.py trait_shard_x2
 crop tight around just the "x1" and "x2" text on a real reward screen
 showing each amount.
 """

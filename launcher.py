@@ -3,14 +3,25 @@ launcher.py
 -----------
 This is the main file you run - it's the brain of the whole app.
 
-The visual look of the app (windows, buttons, colors) lives in ui.py.
-This file handles everything behind the scenes: asking Windows for
-admin permission, the F6/F7 keyboard shortcuts, starting/stopping,
-keeping Roblox in focus, and walking through each mission step by step.
+The visual look of the app (windows, buttons, colors) lives in ui/ui.py.
+The actual automation/game-logic modules live in backend/. This file
+handles everything behind the scenes: asking Windows for admin
+permission, the F6/F7 keyboard shortcuts, starting/stopping, keeping
+Roblox in focus, and walking through each mission step by step.
 """
 
-import ctypes
+import os
 import sys
+
+# backend/ and ui/ modules import each other by plain name (e.g.
+# "import stage_data"), so both folders need to be on sys.path before
+# anything below is imported - done here, first, rather than turning
+# every file in the project into a proper nested package.
+_ROOT = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+for _sub in ("backend", "ui"):
+    sys.path.insert(0, os.path.join(_ROOT, _sub))
+
+import ctypes
 import time
 import threading
 import tkinter as tk

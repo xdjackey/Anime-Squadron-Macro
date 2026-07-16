@@ -9,21 +9,25 @@ capture, or (c) just barely below the threshold.
 USAGE:
   1. Manually get your game to the exact screen where the icon SHOULD be
      visible (e.g. click Create Room yourself and wait for it to load).
-  2. Run:
-       python check_icon.py create_room
+  2. Run (from the repo root):
+       python checker/check_icon.py create_room
   3. Read the score it prints.
 
 Requires: mss, numpy, opencv-python
 """
 
+import os
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
+
 import game_navigator as nav
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python check_icon.py <icon_key>")
-        print("Example: python check_icon.py create_room")
+        print("Usage: python checker/check_icon.py <icon_key>")
+        print("Example: python checker/check_icon.py create_room")
         print("\nAvailable keys are the .png filenames (without .png) in launcher_assets/")
         return
 

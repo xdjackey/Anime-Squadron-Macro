@@ -11,9 +11,10 @@ to someone else as a single file.
 
 HOW TO USE IT:
     Run this anytime after capturing/recapturing icons with
-    capture_icons.py, to refresh asset_data.py with the latest pictures:
+    capture_icons.py, to refresh asset_data.py with the latest pictures
+    (from the repo root):
 
-        python pack_assets.py
+        python backend/pack_assets.py
 
 The launcher automatically uses asset_data.py if it exists - you don't
 need to change anything else. If you ever want to go back to plain

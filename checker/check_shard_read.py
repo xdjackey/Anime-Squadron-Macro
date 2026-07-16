@@ -5,9 +5,15 @@ A troubleshooting tool: checks whether the "x1" or "x2" shard-drop
 picture is showing on your CURRENT screen, and prints what it found.
 
 HOW TO USE IT:
-    Get a result screen with a shard reward showing, then run:
-        python check_shard_read.py
+    Get a result screen with a shard reward showing, then run
+    (from the repo root):
+        python checker/check_shard_read.py
 """
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
 import trait_shard
 

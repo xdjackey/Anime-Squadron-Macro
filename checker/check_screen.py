@@ -9,15 +9,19 @@ logic the launcher itself uses (screen.find_icon / game_navigator).
 Run this any time to sanity-check "does the bot correctly recognize the
 page I'm looking at?" without running the full automated sequence.
 
-USAGE:
-    python check_screen.py
+USAGE (from the repo root):
+    python checker/check_screen.py
         Checks a default set of landmarks covering each known page.
 
-    python check_screen.py menu_play create_room mode_story
+    python checker/check_screen.py menu_play create_room mode_story
         Checks only the icons you list.
 """
 
+import os
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
+
 import game_navigator as nav
 
 # Default landmark icons, each representing a distinct known page/screen.
@@ -74,7 +78,7 @@ def main():
     else:
         print("\nNo known landmark matched at all. Either you're on a page with no "
               "captured landmark yet, or something needs a threshold/recapture check - "
-              "try check_icon.py on the specific icon you expected to match.")
+              "try checker/check_icon.py on the specific icon you expected to match.")
 
 
 if __name__ == "__main__":

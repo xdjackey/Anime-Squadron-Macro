@@ -22,8 +22,10 @@ if getattr(sys, "frozen", False):
     # folder the .exe file itself is sitting in.
     BASE_DIR = os.path.dirname(sys.executable)
 else:
-    # Running as a plain .py file - use the folder this file is in.
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    # Running as plain .py files - this file lives in backend/, one
+    # level below the actual app root (where launcher.py sits), so go
+    # up one directory rather than using backend/ itself.
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def path(filename):

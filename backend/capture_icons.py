@@ -241,7 +241,7 @@ def main():
 
     # QoL: pass specific keys as arguments to jump straight to just those,
     # instead of stepping through the whole list with 's' to skip each one.
-    #   python capture_icons.py chapter_8 chapter_9 start_button
+    #   python backend/capture_icons.py chapter_8 chapter_9 start_button
     requested = sys.argv[1:]
     if requested:
         items_to_run = [(k, d) for k, d in ITEMS if k in requested]

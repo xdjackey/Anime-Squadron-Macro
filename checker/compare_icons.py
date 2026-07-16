@@ -7,20 +7,24 @@ similar-looking icons (e.g. mode tabs, or Normal vs Hard) are being
 confused with each other - if their scores are close together, that
 confirms it.
 
-USAGE:
-  python compare_icons.py mode_story mode_squadron mode_raid mode_challenge mode_invasion
-  python compare_icons.py diff_normal diff_hard
+USAGE (from the repo root):
+  python checker/compare_icons.py mode_story mode_squadron mode_raid mode_challenge mode_invasion
+  python checker/compare_icons.py diff_normal diff_hard
 """
 
+import os
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
+
 import game_navigator as nav
 
 
 def main():
     keys = sys.argv[1:]
     if not keys:
-        print("Usage: python compare_icons.py <key1> <key2> ...")
-        print("Example: python compare_icons.py mode_story mode_squadron mode_raid mode_challenge mode_invasion")
+        print("Usage: python checker/compare_icons.py <key1> <key2> ...")
+        print("Example: python checker/compare_icons.py mode_story mode_squadron mode_raid mode_challenge mode_invasion")
         return
 
     results = []
