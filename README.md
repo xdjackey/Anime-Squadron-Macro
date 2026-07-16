@@ -1,5 +1,7 @@
 # Anime Squadron Macro
 
+📋 **[See what's new in v1.6.0](CHANGELOG.md)**
+
 A launcher that plays Anime Squadron for you. It docks a small control panel
 next to your Roblox window, and once you tell it what to run, it clicks
 through the menus, plays the match, and repeats - so you don't have to sit
