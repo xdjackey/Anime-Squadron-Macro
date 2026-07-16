@@ -1,0 +1,27 @@
+# --- Secrets / personal config - never commit these ---
+launcher_settings.json          # contains your Discord webhook URL
+capture_reference.json          # your personal capture-resolution reference
+manual_shard_credits.json       # your personal manual-credit entries
+shard_progress.json             # your personal farming progress
+last_shard_reset.json           # your personal reset-tracking state
+launcher_log.txt                # your personal session log history
+
+# --- Captured icons - resolution/monitor-specific, personal to your setup ---
+launcher_assets/
+asset_data.py                   # the packed (base64) version of launcher_assets/
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# --- PyInstaller build output (regenerate with the .spec file) ---
+build/
+dist/
+*.spec.bak
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
