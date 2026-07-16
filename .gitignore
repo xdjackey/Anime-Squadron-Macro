@@ -1,14 +1,25 @@
 # --- Secrets / personal config - never commit these ---
-launcher_settings.json          # contains your Discord webhook URL
-capture_reference.json          # your personal capture-resolution reference
-manual_shard_credits.json       # your personal manual-credit entries
-shard_progress.json             # your personal farming progress
-last_shard_reset.json           # your personal reset-tracking state
-launcher_log.txt                # your personal session log history
+# NOTE: .gitignore doesn't support inline "pattern # comment" - a trailing
+# comment on the same line becomes PART of the pattern, so it silently
+# never matches. Keep comments on their own line above each pattern.
+#
+# launcher_settings.json contains your Discord webhook URL
+launcher_settings.json
+# capture_reference.json is your personal capture-resolution reference
+capture_reference.json
+# manual_shard_credits.json holds your personal manual-credit entries
+manual_shard_credits.json
+# shard_progress.json is your personal farming progress
+shard_progress.json
+# last_shard_reset.json is your personal reset-tracking state
+last_shard_reset.json
+# launcher_log.txt is your personal session log history
+launcher_log.txt
 
 # --- Captured icons - resolution/monitor-specific, personal to your setup ---
 launcher_assets/
-asset_data.py                   # the packed (base64) version of launcher_assets/
+# asset_data.py is the packed (base64) version of launcher_assets/
+asset_data.py
 
 # --- Python ---
 __pycache__/
