@@ -44,12 +44,5 @@ Keyboard shortcuts (work even if Roblox is focused):
 Watch the log box at the bottom - it tells you what it's finding (or not
 finding) on screen, which is the easiest way to tell if something's wrong.
 
-## Project layout
-- `launcher.py` - the entry point, run this to start the app.
-- `backend/` - all the automation logic: finding/clicking things on screen,
-  running missions, tracking Trait Shard progress, and so on.
-- `ui/` - the control panel itself (windows, buttons, colors).
-- `checker/` - small standalone tools for troubleshooting icon detection,
-  run individually when something isn't being recognized (e.g.
-  `python checker/check_icon.py create_room`).
+
 
