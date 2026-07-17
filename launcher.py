@@ -37,6 +37,7 @@ import manual_credits
 import stage_data
 import display_info
 import reset_clock
+import auto_update
 from window_lock import find_window, bring_to_front
 from ui import LauncherUI, ROBLOX_TITLE
 from mission_queue import Mission
@@ -110,6 +111,7 @@ class LauncherApp:
             self._start_wait_for_roblox_thread()
 
         threading.Thread(target=self._shard_reset_loop, daemon=True).start()
+        auto_update.check_for_update_async(self._on_update_found, log=self.ui.log)
 
     # ---------- Hotkeys / lifecycle ----------
 
@@ -199,6 +201,43 @@ class LauncherApp:
         except Exception:
             pass
         self.ui.destroy()
+
+    # ---------- Auto-update ----------
+
+    def _on_update_found(self, version, download_url):
+        """Called from the background check thread the moment a newer
+        release is found - hops to the main thread before touching any
+        UI (the messagebox prompt, then the download itself)."""
+        self.root.after(0, lambda: self._prompt_update(version, download_url))
+
+    def _prompt_update(self, version, download_url):
+        import tkinter.messagebox as messagebox
+        yes = messagebox.askyesno(
+            "Update available",
+            f"A new version is available: {version} (you have v{auto_update.CURRENT_VERSION}).\n\n"
+            "Update now? The app will close and restart automatically once it's downloaded.",
+        )
+        if not yes:
+            self.ui.log(f"Skipped update to {version} - will ask again next launch.", "info")
+            return
+        threading.Thread(target=self._download_and_apply_update, args=(download_url,), daemon=True).start()
+
+    def _download_and_apply_update(self, download_url):
+        """Runs on a background thread so the download itself can't
+        freeze the UI. Only hops back to the main thread once the
+        download has actually finished, to launch the swap script and
+        shut the app down cleanly - that's what lets this process fully
+        exit so the script's wait-for-exit loop can proceed."""
+        try:
+            new_exe_path = auto_update.download_update(download_url, log=self.ui.log)
+        except Exception as e:
+            self.ui.log(f"[update] Update download failed: {e}", "error")
+            return
+        self.root.after(0, lambda: self._finish_update(new_exe_path))
+
+    def _finish_update(self, new_exe_path):
+        auto_update.launch_swap_script(new_exe_path, log=self.ui.log)
+        self.on_close()
 
     # ---------- Start / stop ----------
 
@@ -309,7 +348,7 @@ class LauncherApp:
         webhook, if the user's turned that on and set a URL. Silently
         does nothing otherwise - this should never block or fail a
         mission just because Discord isn't configured."""
-        if not self.ui.is_discord_enabled():
+        if not self.ui.is_discord_result_notify_enabled():
             return
         url = self.ui.get_discord_webhook_url()
         if not url:
@@ -319,6 +358,28 @@ class LauncherApp:
             self.ui.log("Discord: Roblox window position unknown - skipping screenshot.", "warning")
             return
         discord_webhook.send_screenshot_async(url, bbox, message=message, log=self.ui.log)
+
+    def _maybe_send_discord_task_complete(self, message):
+        """Fires a plain-text Discord message when a task finishes, if
+        the user's turned that on and set a URL. Bolded (Discord markdown
+        **text**) so it stands out from the per-run result messages."""
+        if not self.ui.is_discord_task_complete_notify_enabled():
+            return
+        url = self.ui.get_discord_webhook_url()
+        if not url:
+            return
+        discord_webhook.send_message_async(url, f"**{message}**", log=self.ui.log)
+
+    def _maybe_send_discord_shard_drop(self, message):
+        """Fires a plain-text Discord message every time a Trait Shard
+        drop is actually counted (not on 0-shard runs), if the user's
+        turned that on and set a URL."""
+        if not self.ui.is_discord_shard_drop_notify_enabled():
+            return
+        url = self.ui.get_discord_webhook_url()
+        if not url:
+            return
+        discord_webhook.send_message_async(url, message, log=self.ui.log)
 
     # ---------- Navigation sequence ----------
 
@@ -393,7 +454,7 @@ class LauncherApp:
             return False
 
         if mission.shard_farming:
-            return self._farm_shards(mission, label)
+            return self._farm_shards(mission)
         return self._run_fixed_repeats(mission, label)
 
     def _run_fixed_repeats(self, mission: Mission, label: str):
@@ -434,9 +495,10 @@ class LauncherApp:
                 break
 
         self.ui.log(f"Mission complete: {label}", "success")
+        self._maybe_send_discord_task_complete(f"Task complete: {label}")
         return True
 
-    def _farm_shards(self, mission: Mission, label: str):
+    def _farm_shards(self, mission: Mission):
         """Auto-replays the same map, reading the trait shard count off
         each result screen and accumulating it. Stops once the running
         total reaches (or slightly passes) mission.shard_target - or, if
@@ -475,9 +537,16 @@ class LauncherApp:
 
             outcome = "VICTORY" if result_key == "victory_screen" else "DEFEAT"
             self.ui.log(f"Result: {outcome}", "success" if outcome == "VICTORY" else "warning")
-            self._maybe_send_discord_screenshot(f"{outcome} - {label} (run {run_number})")
 
-            self._refocus_roblox()
+            # Read the shard count FIRST, before anything else - the
+            # reward badge can be transient (the game may auto-advance or
+            # animate it away), so this has to happen the instant the
+            # result screen is confirmed showing. wait_for_any_screen
+            # just proved Roblox is visible RIGHT NOW via a real screen
+            # capture, so there's nothing to refocus here - a refocus
+            # (with its own 0.15s sleep) used to run first for no benefit,
+            # and _replay_or_leave() below refocuses again anyway before
+            # it needs to click anything.
             try:
                 shard_count = trait_shard.read_shard_count(log=self.ui.log)
             except FileNotFoundError as e:
@@ -490,7 +559,21 @@ class LauncherApp:
             shard_progress.set_progress(mission, total_shards)
             target_label = f"/{mission.shard_target}" if has_target else ""
             self.ui.log(f"Trait shards this run: {shard_count}  (total: {total_shards}{target_label})")
-            self.root.after(0, lambda lbl=mission.label(): self.ui.set_current_task_label(lbl))
+
+            # mission.label() bakes in the CURRENT banked/target count (it
+            # reads shard_progress fresh every call) - calling it here,
+            # AFTER shard_progress.set_progress() just above, is what
+            # actually reflects this run's result. The old code reused a
+            # single `label` string computed once before the whole
+            # farming loop started, so every message (Discord included)
+            # kept showing the STARTING count (e.g. "0/30") no matter how
+            # many runs or shards actually happened.
+            current_label = mission.label()
+            self._maybe_send_discord_screenshot(f"{outcome} - {current_label} (run {run_number})")
+            if shard_count > 0:
+                self._maybe_send_discord_shard_drop(
+                    f"+{shard_count} Trait Shard{'s' if shard_count != 1 else ''} - {current_label}")
+            self.root.after(0, lambda lbl=current_label: self.ui.set_current_task_label(lbl))
 
             if has_target:
                 self.root.after(0, lambda c=total_shards, t=mission.shard_target: self.ui.set_run_progress(c, t))
@@ -504,16 +587,22 @@ class LauncherApp:
             if not self._replay_or_leave(is_last_run):
                 return False
             if end_task and not target_reached and not about_to_hit_cap:
-                self.ui.log(f"Ended '{label}' early at {total_shards} shard(s) banked - "
-                            f"progress is saved, so this resumes from here next time.", "warning")
+                self.ui.log(f"Ended '{mission.label()}' early - progress is saved, so this "
+                            f"resumes from here next time.", "warning")
                 break
 
+        # Captured BEFORE clear_progress() below - that call resets the
+        # banked count back to 0 once the target's been hit, so calling
+        # mission.label() any later would show "0/target" right in the
+        # completion message for the mission that just HIT its target.
+        final_label = mission.label()
         if has_target and total_shards < mission.shard_target:
             self.ui.log(f"Hit the {mission.repeat_count}-run safety cap before reaching "
                         f"{mission.shard_target} shards (got {total_shards}) - moving on anyway.", "warning")
         if has_target and total_shards >= mission.shard_target:
             shard_progress.clear_progress(mission)
-        self.ui.log(f"Mission complete: {label} ({total_shards} shards)", "success")
+        self.ui.log(f"Mission complete: {final_label}", "success")
+        self._maybe_send_discord_task_complete(f"Task complete: {final_label}")
         return True
 
     def _replay_or_leave(self, is_last_run: bool):

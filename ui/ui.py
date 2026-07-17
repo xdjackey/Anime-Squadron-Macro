@@ -18,6 +18,7 @@ import os
 
 import app_paths
 import app_logging
+import auto_update
 
 SETTINGS_FILE = app_paths.path("launcher_settings.json")
 
@@ -26,13 +27,27 @@ def load_settings():
     """Returns saved settings (currently just the Discord webhook config)
     from disk, or sensible defaults if the file doesn't exist yet or is
     unreadable for any reason."""
-    defaults = {"discord_webhook_url": "", "discord_enabled": False, "shard_targets": {}, "verbose_logging": False}
+    defaults = {
+        "discord_webhook_url": "",
+        # "discord_enabled" was the original single on/off toggle (screenshot
+        # on every victory/defeat) - kept as the default source for
+        # discord_notify_result below so anyone who already had it on
+        # doesn't silently lose that notification after this update.
+        "discord_enabled": False,
+        "discord_notify_result": False,
+        "discord_notify_task_complete": False,
+        "discord_notify_shard_drop": False,
+        "shard_targets": {},
+        "verbose_logging": False,
+    }
     if not os.path.exists(SETTINGS_FILE):
         return defaults
     try:
         with open(SETTINGS_FILE, "r") as f:
             data = json.load(f)
         defaults.update(data)
+        if "discord_notify_result" not in data and "discord_enabled" in data:
+            defaults["discord_notify_result"] = data["discord_enabled"]
         return defaults
     except Exception:
         return defaults
@@ -47,7 +62,12 @@ def save_settings(settings):
 
 # ======================= APP TEXT =======================
 APP_TITLE_LEFT = "ANIME SQUADRON"
-APP_TITLE_RIGHT = "MACRO V1.0"
+# Reads from auto_update.CURRENT_VERSION instead of its own hardcoded
+# string - the two used to drift out of sync (this was stuck on "V1.0"
+# long after auto_update.py had already moved on to 1.6.0), since
+# nothing forced them to be bumped together. Now there's exactly one
+# place to update per release.
+APP_TITLE_RIGHT = f"MACRO V{auto_update.CURRENT_VERSION}"
 ROBLOX_TITLE = "Roblox"
 
 # ======================= LAYOUT =======================
@@ -198,15 +218,17 @@ class LauncherUI:
         """Creates every settings variable ONCE at startup, loaded from
         disk - not lazily inside _build_settings_card/_build_shard_targets_card,
         which only run when the Settings popup is actually opened. Code
-        elsewhere (is_discord_enabled, is_verbose_enabled, the Discord
-        screenshot check during farming, _save_settings on close) reads
+        elsewhere (is_discord_result_notify_enabled and friends, is_verbose_enabled,
+        the Discord checks during farming, _save_settings on close) reads
         these regardless of whether Settings has ever been opened this
         session - if they were only created lazily, any of that code
         running first would crash with an AttributeError, which is
         exactly what was happening before this fix."""
         saved = load_settings()
         self.discord_webhook_var = tk.StringVar(value=saved["discord_webhook_url"])
-        self.discord_enabled_var = tk.BooleanVar(value=saved["discord_enabled"])
+        self.discord_notify_result_var = tk.BooleanVar(value=saved["discord_notify_result"])
+        self.discord_notify_task_complete_var = tk.BooleanVar(value=saved["discord_notify_task_complete"])
+        self.discord_notify_shard_drop_var = tk.BooleanVar(value=saved["discord_notify_shard_drop"])
         self.verbose_logging_var = tk.BooleanVar(value=saved.get("verbose_logging", False))
         self._verbose_logging_cache = self.verbose_logging_var.get()
 
@@ -507,7 +529,23 @@ class LauncherUI:
 
         tk.Checkbutton(
             inner, text="Send a screenshot of Roblox after each victory/defeat",
-            variable=self.discord_enabled_var, command=self._save_settings,
+            variable=self.discord_notify_result_var, command=self._save_settings,
+            bg=CARD_BG, fg=TEXT_MAIN, selectcolor=FIELD_BG,
+            activebackground=CARD_BG, activeforeground=TEXT_MAIN, font=("Segoe UI", 9),
+            anchor="w", cursor="hand2"
+        ).pack(fill="x", pady=(0, 4))
+
+        tk.Checkbutton(
+            inner, text="Send a message when a task finishes",
+            variable=self.discord_notify_task_complete_var, command=self._save_settings,
+            bg=CARD_BG, fg=TEXT_MAIN, selectcolor=FIELD_BG,
+            activebackground=CARD_BG, activeforeground=TEXT_MAIN, font=("Segoe UI", 9),
+            anchor="w", cursor="hand2"
+        ).pack(fill="x", pady=(0, 4))
+
+        tk.Checkbutton(
+            inner, text="Send a message every time a Trait Shard drop is counted",
+            variable=self.discord_notify_shard_drop_var, command=self._save_settings,
             bg=CARD_BG, fg=TEXT_MAIN, selectcolor=FIELD_BG,
             activebackground=CARD_BG, activeforeground=TEXT_MAIN, font=("Segoe UI", 9),
             anchor="w", cursor="hand2"
@@ -537,7 +575,10 @@ class LauncherUI:
         existing = load_settings()
         existing["shard_targets"] = {key: var.get().strip() for key, var in self.shard_target_field_vars.items()}
         existing["discord_webhook_url"] = self.discord_webhook_var.get().strip()
-        existing["discord_enabled"] = self.discord_enabled_var.get()
+        existing["discord_notify_result"] = self.discord_notify_result_var.get()
+        existing["discord_notify_task_complete"] = self.discord_notify_task_complete_var.get()
+        existing["discord_notify_shard_drop"] = self.discord_notify_shard_drop_var.get()
+        existing.pop("discord_enabled", None)  # superseded by discord_notify_result
         existing["verbose_logging"] = self.verbose_logging_var.get()
         self._verbose_logging_cache = self.verbose_logging_var.get()
         save_settings(existing)
@@ -718,8 +759,14 @@ class LauncherUI:
     def get_discord_webhook_url(self):
         return self.discord_webhook_var.get().strip()
 
-    def is_discord_enabled(self):
-        return self.discord_enabled_var.get()
+    def is_discord_result_notify_enabled(self):
+        return self.discord_notify_result_var.get()
+
+    def is_discord_task_complete_notify_enabled(self):
+        return self.discord_notify_task_complete_var.get()
+
+    def is_discord_shard_drop_notify_enabled(self):
+        return self.discord_notify_shard_drop_var.get()
 
     def is_verbose_enabled(self):
         var = getattr(self, "verbose_logging_var", None)

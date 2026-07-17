@@ -120,6 +120,12 @@ THRESHOLD_OVERRIDES = {
     # (see check_icon.py / compare_icons.py to verify scores directly).
     "victory_screen": 0.8,
     "defeat_screen": 0.8,
+    # Same "two crops that only differ in one small digit" problem as
+    # chapter_N above - see trait_shard.py for how the search for these
+    # is also anchored to trait_shard_icon's position so it can't cross-
+    # match some OTHER reward's own "x1"/"x2" badge on the same screen.
+    "trait_shard_x1": 0.8,
+    "trait_shard_x2": 0.8,
 }
 
 # Masked matches (icons with a transparent background) use a different
@@ -244,19 +250,36 @@ def _best_match(frame_gray, template, mask, scale_range, scale_steps):
     return best_val, best_loc, best_w, best_h
 
 
-def find_icon_bbox(key, threshold=None, scale_range=DEFAULT_SCALE_RANGE):
+def find_icon_bbox(key, threshold=None, scale_range=DEFAULT_SCALE_RANGE, region=None, scale_steps=None):
     """Like find_icon, but returns the match's top-left corner and size
     instead of just its center - (found, left, top, w, h, score). Useful
     when some OTHER piece of the screen needs to be located relative to
     this icon (e.g. the trait shard count printed next to the shard
-    icon) rather than clicking the icon itself."""
+    icon) rather than clicking the icon itself.
+
+    region, if given, is (left, top, width, height) in absolute screen
+    coordinates - restricts the search to that box instead of the whole
+    screen. Use this to search near an already-found anchor icon rather
+    than risk matching some OTHER, visually similar element elsewhere on
+    screen (see trait_shard.py).
+
+    scale_steps, if given, overrides the default SCALE_STEPS - lets a
+    caller that's confident in a narrow scale_range (e.g. several icons
+    captured in the same session, which all share the same capture-time-
+    to-run-time size ratio) trade the extra precision of a wide search
+    for speed, without affecting every other icon's default steps."""
     template, mask = _load_template(key)
     threshold = _threshold_for(key, threshold, masked=mask is not None)
     effective_range = _effective_scale_range(scale_range)
+    steps = scale_steps if scale_steps is not None else SCALE_STEPS
     with mss.mss() as sct:
-        monitor = sct.monitors[0]
+        if region is not None:
+            region_left, region_top, region_w, region_h = region
+            monitor = {"left": region_left, "top": region_top, "width": region_w, "height": region_h}
+        else:
+            monitor = sct.monitors[0]
         frame_gray = _grab_screen_gray(sct, monitor)
-        score, loc, w, h = _best_match(frame_gray, template, mask, effective_range, SCALE_STEPS)
+        score, loc, w, h = _best_match(frame_gray, template, mask, effective_range, steps)
         if score >= threshold and loc is not None:
             left = monitor["left"] + loc[0]
             top = monitor["top"] + loc[1]

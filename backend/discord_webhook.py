@@ -70,3 +70,29 @@ def send_screenshot_async(webhook_url, bbox, message=None, log=print):
     threading.Thread(
         target=send_screenshot, args=(webhook_url, bbox, message, log), daemon=True,
     ).start()
+
+
+def send_message(webhook_url, message, log=print):
+    """Posts a plain text message to a Discord webhook - no screenshot.
+    Runs synchronously; use send_message_async from the automation
+    thread. Returns True on success, False on any failure (same
+    failure handling as send_screenshot)."""
+    if not webhook_url:
+        log("[discord] No webhook URL set - skipping message.")
+        return False
+    try:
+        resp = requests.post(webhook_url, json={"content": message}, timeout=15)
+        if resp.status_code >= 300:
+            log(f"[discord] Webhook responded with {resp.status_code}: {resp.text[:200]}")
+            return False
+        return True
+    except Exception as e:
+        log(f"[discord] Failed to send message: {e}")
+        return False
+
+
+def send_message_async(webhook_url, message, log=print):
+    """Fire-and-forget version of send_message."""
+    threading.Thread(
+        target=send_message, args=(webhook_url, message, log), daemon=True,
+    ).start()

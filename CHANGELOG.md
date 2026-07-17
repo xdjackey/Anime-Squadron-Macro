@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.6.5
+
+### ✨ Added
+- 🔄 Auto-updater - checks GitHub for a newer release on startup and, if you
+  agree, downloads and swaps in the new .exe automatically.
+- 🔔 Discord notifications split into 3 independent toggles instead of one:
+  screenshot after each victory/defeat, a message when a task finishes, and
+  a message every time a Trait Shard drop is actually counted.
+
+### 🔧 Fixed
+- 🎯 Trait Shard detection reliability - the "x1"/"x2" drop-amount search is
+  now anchored to a small area right above the "Trait Shards" label instead
+  of scanning the whole screen. Fixes two things at once: other reward
+  drops on the same result screen showing their own "x1"/"x2" badge no
+  longer get mistaken for a shard drop, and x1 vs. x2 misreads caused by
+  the shard icon's shimmering/animated background no longer dominate the
+  match score.
+- ⚡ Trait Shard detection speed - narrowed the scale-search range and step
+  count specifically for the shard-related icons (they're always captured
+  together in one session, so they don't need the wide range built for
+  covering every user's different monitor setup). Detection now takes
+  roughly a quarter of the time it used to.
+- ⏱️ Shard count is now read the instant the victory/defeat screen is
+  detected, instead of after a Discord screenshot dispatch and an
+  unconditional 150ms refocus delay ran first - the reward badge can be
+  transient, so anything delaying the read risked missing it.
+- 🔢 Discord messages (and a couple of log lines) getting stuck showing the
+  shard count from the START of a farming session (e.g. "0/30") for the
+  entire run, even as shards were actually being banked in the background -
+  caused by reusing a label string computed once before the loop started
+  instead of recomputing it fresh after each run.
+- 🏷️ Title bar was still showing "V1.0" long after the app had moved on -
+  it now reads the version from the same single place the auto-updater
+  does, instead of a separate hardcoded string nobody remembered to bump.
+
 ## v1.6.0
 
 ### 🐛 Bugs reported

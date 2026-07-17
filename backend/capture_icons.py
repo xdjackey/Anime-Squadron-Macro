@@ -147,14 +147,21 @@ ITEMS += [
     ("return_to_lobby_button", "the 'Return to Lobby' button that appears INSIDE the settings "
                                 "menu after clicking the gear icon - open that menu first, then "
                                 "capture just this button"),
+    ("trait_shard_icon", "OPTIONAL (only needed if you plan to farm Trait Shards): the "
+                          "'Trait Shards' text label on a result screen showing a shard reward - "
+                          "crop tight around just that text. The x1/x2 pictures below search a "
+                          "small area right above wherever this is found, instead of the whole "
+                          "screen, so this needs to be captured first."),
     ("trait_shard_x1", "OPTIONAL: get a result screen showing a Trait Shard drop of exactly "
-                        "'x1' - crop TIGHT around just the 'x1' text (and a little of the icon "
-                        "if you want, but the text matters most). This and trait_shard_x2 below "
-                        "replace needing any OCR/calibration step at all - shards only ever drop "
-                        "in amounts of 1 or 2, so just recognizing which of these two pictures is "
-                        "showing tells the launcher exactly how many dropped."),
-    ("trait_shard_x2", "OPTIONAL: same as above but for a drop of 'x2' - crop tight around just "
-                        "the 'x2' text on a real result screen showing that amount."),
+                        "'x1' - crop TIGHT around ONLY the 'x1' digit badge itself, no shard icon, "
+                        "no background, no 'Trait Shards' text. The icon/background shimmer and "
+                        "animate between frames, which hurts the match if included - the digit "
+                        "badge alone is the one part that stays visually consistent. This and "
+                        "trait_shard_x2 below replace needing any OCR/calibration step at all - "
+                        "shards only ever drop in amounts of 1 or 2, so just recognizing which of "
+                        "these two pictures is showing tells the launcher exactly how many dropped."),
+    ("trait_shard_x2", "OPTIONAL: same as above but for a drop of 'x2' - crop TIGHT around ONLY "
+                        "the 'x2' digit badge, nothing else."),
 ]
 
 
