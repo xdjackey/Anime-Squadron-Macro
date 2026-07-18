@@ -2,107 +2,105 @@
 trait_shard.py
 ----------------
 Figures out how many Trait Shards dropped this run by checking for two
-known pictures - "x1" and "x2" - since shards only ever drop in
-amounts of 1 or 2 per run. This is much simpler and more reliable than
-reading the number with text recognition, which could occasionally
-misread a digit and add the wrong amount.
+known pictures - "x1" and "x2" - since shards only ever drop in amounts
+of 1 or 2. Simpler and more reliable than OCR.
 
-The x1/x2 search is restricted to a small region right above the
-"Trait Shards" label (trait_shard_icon) instead of searching the whole
-screen. Two reasons:
-  - Other reward drops on the same result screen can ALSO show their
-    own "x1"/"x2" badge (a currency or material reward, say) - a
-    screen-wide search for just the digit badge risks matching one of
-    THOSE instead of the trait shard one.
-  - It also makes misreads between x1 and x2 themselves less likely:
-    without the region restriction, both templates end up needing to
-    include a lot of the surrounding icon/background to stay uniquely
-    tied to the trait shard reward, but that background shimmers/
-    animates between frames, which drowns out the one thing that
-    should actually decide the read (the digit itself).
+The reward can pop in with a brief animation and can land anywhere on
+the results screen depending on UI scaling/layout, so read_shard_count()
+searches the whole Roblox game window (not a fixed sub-area) and polls
+repeatedly for a few seconds instead of taking one snapshot. Each scan
+is done on a downscaled copy of the frame (see DOWNSCALE) to keep a
+full-window search fast enough to actually catch a brief reward flash.
 
-To set this up, capture three pictures (from the repo root):
+Setup (from the repo root), tight crops only - no icon/background:
     python backend/capture_icons.py trait_shard_icon
     python backend/capture_icons.py trait_shard_x1
     python backend/capture_icons.py trait_shard_x2
-trait_shard_icon should be a tight crop of just the "Trait Shards" text.
-trait_shard_x1/x2 should be tight crops of just the "x1"/"x2" badge
-itself - not the shard icon or any background around it.
 """
+
+import time
 
 from screen import find_icon_bbox
 
-# How far above the "Trait Shards" label to search for the x1/x2 badge,
-# and how much wider than the label to search - expressed as a multiple
-# of the label's OWN matched size so it scales with whatever resolution
-# the label was actually found at, instead of a fixed pixel guess.
-SEARCH_HEIGHT_MULTIPLE = 3.0
-SEARCH_WIDTH_MARGIN_MULTIPLE = 0.5
-
-# Minimum score gap required between x1 and x2 before trusting whichever
-# scored higher - if they're this close, it's genuinely ambiguous rather
-# than one being a clean match and the other noise, so this reports
-# "couldn't tell" instead of guessing.
+# Minimum score gap needed to trust whichever of x1/x2 scored higher -
+# below this it's too close to call, so we keep polling instead.
 MIN_SCORE_GAP = 0.05
 
-# trait_shard_icon/x1/x2 are always captured back-to-back in the same
-# capture_icons.py session (right after docking, before ANY individual
-# item is captured - see save_capture_reference), so they share the
-# exact same capture-time-to-run-time size ratio for this user, every
-# time. screen._effective_scale_range() already re-centers the search
-# on that ratio dynamically, so there's no need for the wide default
-# range (which exists to cover wildly different USERS' setups) here -
-# a narrower band around 1.0x plus fewer scale steps still finds these
-# reliably, at a fraction of the compute cost. Worth it since this runs
-# after every single victory/defeat screen. Kept wider than a razor-thin
-# margin, though - a real-world near-miss (icon captured slightly off
-# from this session's actual docked size) showed this needs some slack
-# rather than assuming the ratio is dead-on every time.
+# trait_shard_icon/x1/x2 are always captured together in one session, so
+# they share the same size ratio every time - a narrow scale range and
+# few steps finds them fast without the wide search other icons need.
 SCALE_RANGE = (0.85, 1.15)
 SCALE_STEPS = 8
 
+# Matching cost scales with the frame's pixel count, and these searches
+# now cover the WHOLE game window every poll - shrinking the search
+# frame to 60% before matching cuts that cost by roughly 3x, with
+# negligible score loss even for the small x1/x2 crops (tested against
+# realistic image content, not just noise). Precise pixel coordinates
+# aren't needed here anyway, just presence/roughly-which-badge.
+DOWNSCALE = 0.6
 
-def read_shard_count(log=print):
-    """Checks whether the 'x1' or 'x2' shard-drop picture is showing
-    just above the "Trait Shards" label right now. Returns 1, 2, or None
-    if neither is found (no shard reward this run, the result screen
-    isn't showing yet, or the read was too ambiguous to trust)."""
-    found_icon, icon_left, icon_top, icon_w, icon_h, icon_score = find_icon_bbox(
-        "trait_shard_icon", scale_range=SCALE_RANGE, scale_steps=SCALE_STEPS)
-    if not found_icon:
-        log(f"[shard] 'Trait Shards' label not found (best score {icon_score:.2f}) - "
-            f"no shard reward this run, or the result screen isn't showing yet.")
-        return None
+# How long to keep polling for the reward to appear and resolve, and how
+# long to pause between polls - covers both the pop-in animation delay
+# and any single-frame misses. Faster per-poll matching (DOWNSCALE
+# above) means a short poll_pause still gets several checks in before
+# timeout instead of missing a reward that only flashes briefly.
+SCAN_TIMEOUT = 5.0
+POLL_PAUSE = 0.2
 
-    search_region = (
-        int(icon_left - icon_w * SEARCH_WIDTH_MARGIN_MULTIPLE),
-        int(icon_top - icon_h * SEARCH_HEIGHT_MULTIPLE),
-        int(icon_w * (1 + 2 * SEARCH_WIDTH_MARGIN_MULTIPLE)),
-        int(icon_h * SEARCH_HEIGHT_MULTIPLE),
-    )
-    found_x1, _, _, _, _, score_x1 = find_icon_bbox(
-        "trait_shard_x1", region=search_region, scale_range=SCALE_RANGE, scale_steps=SCALE_STEPS)
-    found_x2, _, _, _, _, score_x2 = find_icon_bbox(
-        "trait_shard_x2", region=search_region, scale_range=SCALE_RANGE, scale_steps=SCALE_STEPS)
+# trait_shard_icon is just the "Trait Shards" text label - x1/x2 are the
+# small count badge next to it. Both are searched over the whole window
+# independently, so without this check a loose/coincidental match on
+# each - anywhere, unrelated to each other - could combine into a false
+# reading (e.g. some other "xN" badge elsewhere on the results screen
+# mistaken for the shard count). Requiring the badge match to actually
+# be near the label match is what ties them back into one real reward.
+MAX_BADGE_DISTANCE = 300  # pixels, either axis, from the label's center
 
-    if found_x1 and found_x2:
-        gap = abs(score_x1 - score_x2)
-        if gap < MIN_SCORE_GAP:
-            log(f"[shard] Both 'x1' (score {score_x1:.2f}) and 'x2' (score {score_x2:.2f}) matched "
-                f"near the shard label with too small a gap ({gap:.2f}) to trust either - treating "
-                f"this run as unread. Consider recropping them tighter (just the digit badge, not "
-                f"the icon/background).", "warning")
-            return None
-        log(f"[shard] Both 'x1' (score {score_x1:.2f}) and 'x2' (score {score_x2:.2f}) matched - "
-            f"using whichever scored higher (gap {gap:.2f}).", "warning")
-        return 2 if score_x2 > score_x1 else 1
 
-    if found_x2:
-        return 2
-    if found_x1:
-        return 1
+def _near(box_a, box_b, max_distance=MAX_BADGE_DISTANCE):
+    ax, ay, aw, ah = box_a
+    bx, by, bw, bh = box_b
+    return (abs((ax + aw / 2) - (bx + bw / 2)) <= max_distance
+            and abs((ay + ah / 2) - (by + bh / 2)) <= max_distance)
 
-    log(f"[shard] Found the 'Trait Shards' label but neither 'x1' nor 'x2' matched near it "
-        f"(best scores: x1={score_x1:.2f}, x2={score_x2:.2f}) - couldn't read the amount this run.",
-        "warning")
+
+def read_shard_count(log=print, region=None, timeout=SCAN_TIMEOUT, poll_pause=POLL_PAUSE):
+    """Waits for the Trait Shards reward to finish animating in, then
+    reads whether it shows 'x1' or 'x2'. Searches the whole Roblox game
+    window (region) rather than a fixed sub-area, and polls repeatedly
+    until a reward is confirmed or `timeout` seconds pass. Returns 1, 2,
+    or None if no reward is ever confirmed (no drop this run, or the
+    read stayed ambiguous the whole time) - the caller logs the actual
+    count, so this only logs the no-shard-detected case."""
+    start = time.time()
+
+    while time.time() - start < timeout:
+        found_icon, icon_left, icon_top, icon_w, icon_h, _ = find_icon_bbox(
+            "trait_shard_icon", region=region, scale_range=SCALE_RANGE, scale_steps=SCALE_STEPS,
+            downscale=DOWNSCALE)
+        if found_icon:
+            icon_box = (icon_left, icon_top, icon_w, icon_h)
+            found_x2, x2_left, x2_top, x2_w, x2_h, score_x2 = find_icon_bbox(
+                "trait_shard_x2", region=region, scale_range=SCALE_RANGE, scale_steps=SCALE_STEPS,
+                downscale=DOWNSCALE)
+            found_x1, x1_left, x1_top, x1_w, x1_h, score_x1 = find_icon_bbox(
+                "trait_shard_x1", region=region, scale_range=SCALE_RANGE, scale_steps=SCALE_STEPS,
+                downscale=DOWNSCALE)
+            found_x2 = found_x2 and _near(icon_box, (x2_left, x2_top, x2_w, x2_h))
+            found_x1 = found_x1 and _near(icon_box, (x1_left, x1_top, x1_w, x1_h))
+
+            if found_x1 and found_x2:
+                if abs(score_x1 - score_x2) >= MIN_SCORE_GAP:
+                    return 2 if score_x2 > score_x1 else 1
+                # Too close to call yet - the pop-in animation may still
+                # be mid-transition between the two, so keep polling.
+            elif found_x2:
+                return 2
+            elif found_x1:
+                return 1
+
+        time.sleep(poll_pause)
+
+    log("[shard] No shard detected this run.")
     return None

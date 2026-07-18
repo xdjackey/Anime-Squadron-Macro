@@ -1,14 +1,9 @@
 """
 app_logging.py
 ------------------
-Writes every log message to a plain text file on disk (launcher_log.txt),
-in addition to whatever shows up in the app's own log panel. The in-app
-panel clears when you close the app or hit "Clear" - this file doesn't,
-so you can look back at what happened in a previous session, or just
-send the file over if something needs troubleshooting.
-
-This never raises an exception itself - a failed disk write here should
-never be able to crash the actual automation.
+Writes every log message to launcher_log.txt, on top of whatever shows
+in the app's own log panel - so history survives after the panel clears.
+Never raises; a failed write here should never crash the app.
 """
 
 import os
@@ -18,16 +13,12 @@ import app_paths
 
 LOG_FILE = app_paths.path("launcher_log.txt")
 
-# Once the log file gets this big, trim it back down to the most recent
-# half - keeps it from growing forever over many sessions, while still
-# keeping plenty of recent history.
+# Trim the log back to its most recent half once it gets this big.
 MAX_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
 def write_log_line(text, level=None):
-    """Appends one timestamped line to launcher_log.txt. Call this
-    alongside (not instead of) whatever shows the message in the app's
-    own log panel."""
+    """Appends one timestamped line to launcher_log.txt."""
     try:
         _rotate_if_needed()
         ts = time.strftime("%Y-%m-%d %H:%M:%S")

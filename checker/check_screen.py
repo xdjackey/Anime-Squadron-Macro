@@ -1,20 +1,11 @@
 """
 check_screen.py
 ------------------
-Diagnostic tool: checks a set of known "landmark" icons against your
-CURRENT screen and tells you which one(s) match - i.e. what page the bot
-thinks you're actually on right now, using the exact same detection
-logic the launcher itself uses (screen.find_icon / game_navigator).
+Checks known "landmark" icons against your current screen and tells you
+which page the bot thinks you're on.
 
-Run this any time to sanity-check "does the bot correctly recognize the
-page I'm looking at?" without running the full automated sequence.
-
-USAGE (from the repo root):
-    python checker/check_screen.py
-        Checks a default set of landmarks covering each known page.
-
-    python checker/check_screen.py menu_play create_room mode_story
-        Checks only the icons you list.
+Usage: python checker/check_screen.py [icon_key ...]
+(no args = checks a default set covering every known page)
 """
 
 import os
@@ -24,8 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import game_navigator as nav
 
-# Default landmark icons, each representing a distinct known page/screen.
-# Add your own here if you capture new landmarks for other pages.
+# One landmark icon per known page - add more here as needed.
 DEFAULT_LANDMARKS = {
     "menu_play": "Main menu / lobby",
     "create_room": "Create Room button visible",

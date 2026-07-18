@@ -1,13 +1,11 @@
 """
 check_shard_read.py
 ----------------------
-A troubleshooting tool: checks whether the "x1" or "x2" shard-drop
-picture is showing on your CURRENT screen, and prints what it found.
+Checks whether the "x1"/"x2" shard-drop badge is showing on your current
+screen and prints what it found.
 
-HOW TO USE IT:
-    Get a result screen with a shard reward showing, then run
-    (from the repo root):
-        python checker/check_shard_read.py
+Usage: get a result screen with a shard reward up, then run
+    python checker/check_shard_read.py
 """
 
 import os

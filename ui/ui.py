@@ -29,16 +29,18 @@ def load_settings():
     unreadable for any reason."""
     defaults = {
         "discord_webhook_url": "",
-        # "discord_enabled" was the original single on/off toggle (screenshot
-        # on every victory/defeat) - kept as the default source for
-        # discord_notify_result below so anyone who already had it on
-        # doesn't silently lose that notification after this update.
+        # Old single on/off toggle - kept as a fallback source for
+        # discord_notify_result so existing settings aren't lost.
         "discord_enabled": False,
         "discord_notify_result": False,
         "discord_notify_task_complete": False,
         "discord_notify_shard_drop": False,
         "shard_targets": {},
         "verbose_logging": False,
+        # Off by default - the in-game Space-jump nudge can interfere
+        # with trait shard stages, so this is opt-in rather than always
+        # running in the background.
+        "anti_idle_enabled": False,
     }
     if not os.path.exists(SETTINGS_FILE):
         return defaults
@@ -62,21 +64,17 @@ def save_settings(settings):
 
 # ======================= APP TEXT =======================
 APP_TITLE_LEFT = "ANIME SQUADRON"
-# Reads from auto_update.CURRENT_VERSION instead of its own hardcoded
-# string - the two used to drift out of sync (this was stuck on "V1.0"
-# long after auto_update.py had already moved on to 1.6.0), since
-# nothing forced them to be bumped together. Now there's exactly one
-# place to update per release.
+# Reads from auto_update.CURRENT_VERSION instead of a separate hardcoded
+# string, so the two can't drift out of sync.
 APP_TITLE_RIGHT = f"MACRO V{auto_update.CURRENT_VERSION}"
 ROBLOX_TITLE = "Roblox"
 
 # ======================= LAYOUT =======================
 UI_WIDTH = 380
 LOG_HEIGHT = 200
-TITLE_BAR_HEIGHT = titlebar_height()  # matches Roblox's actual native title bar height,
-                                       # so the overlay that covers it lines up exactly
-PANEL_OVERLAP = EDGE_OVERLAP # overlap panel leftward to hide Roblox right border gap
-LOG_OVERLAP = EDGE_OVERLAP   # overlap log upward to hide Roblox bottom border gap
+TITLE_BAR_HEIGHT = titlebar_height()  # matches Roblox's real title bar height
+PANEL_OVERLAP = EDGE_OVERLAP  # overlap panel leftward to hide Roblox's right border gap
+LOG_OVERLAP = EDGE_OVERLAP    # overlap log upward to hide Roblox's bottom border gap
 
 # ======================= THEME =======================
 BG = "#121212"
@@ -171,8 +169,7 @@ class LauncherUI:
         self.log_win.configure(bg=BG)
         self._build_log_bar(self.log_win)
 
-        # Separate overlay that covers ONLY Roblox's native title bar area.
-        # It does not stretch over the right control panel.
+        # Overlay covering only Roblox's native title bar - not the panel.
         self.title_win = tk.Toplevel(root)
         self.title_win.overrideredirect(True)
         self.title_win.attributes("-topmost", True)
@@ -198,32 +195,22 @@ class LauncherUI:
                  font=("Segoe UI", 10, "bold")).pack(side="left", pady=6)
 
     def _enable_mousewheel_scroll(self, canvas, toplevel):
-        """Binds mousewheel scrolling for this canvas. Uses bind_all
-        (needed so scrolling works while hovering over ANY child widget -
-        labels, entries - not just bare canvas background), but with a
-        toplevel check inside the handler and add='+' so multiple
-        scrollable windows can coexist safely: each handler only acts if
-        the wheel event actually happened within ITS OWN window, and
-        stacking handlers with add='+' means one window's binding can
-        never silently overwrite or break another's."""
+        """Binds mousewheel scrolling for this canvas via bind_all (so it
+        works over any child widget, not just bare canvas), guarded by a
+        toplevel check + add='+' so multiple scrollable windows coexist
+        without overwriting each other's bindings."""
         def handler(event):
             try:
                 if event.widget.winfo_toplevel() == toplevel:
                     canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
             except tk.TclError:
-                pass  # toplevel or canvas already destroyed - ignore
+                pass  # toplevel or canvas already destroyed
         canvas.bind_all("<MouseWheel>", handler, add="+")
 
     def _init_persistent_settings_vars(self):
-        """Creates every settings variable ONCE at startup, loaded from
-        disk - not lazily inside _build_settings_card/_build_shard_targets_card,
-        which only run when the Settings popup is actually opened. Code
-        elsewhere (is_discord_result_notify_enabled and friends, is_verbose_enabled,
-        the Discord checks during farming, _save_settings on close) reads
-        these regardless of whether Settings has ever been opened this
-        session - if they were only created lazily, any of that code
-        running first would crash with an AttributeError, which is
-        exactly what was happening before this fix."""
+        """Creates every settings variable ONCE at startup rather than
+        lazily inside the Settings popup builders - other code reads
+        these regardless of whether Settings has ever been opened."""
         saved = load_settings()
         self.discord_webhook_var = tk.StringVar(value=saved["discord_webhook_url"])
         self.discord_notify_result_var = tk.BooleanVar(value=saved["discord_notify_result"])
@@ -231,6 +218,7 @@ class LauncherUI:
         self.discord_notify_shard_drop_var = tk.BooleanVar(value=saved["discord_notify_shard_drop"])
         self.verbose_logging_var = tk.BooleanVar(value=saved.get("verbose_logging", False))
         self._verbose_logging_cache = self.verbose_logging_var.get()
+        self.anti_idle_enabled_var = tk.BooleanVar(value=saved.get("anti_idle_enabled", False))
 
         saved_targets = saved.get("shard_targets", {})
         self.shard_target_field_vars = {}
@@ -272,6 +260,15 @@ class LauncherUI:
         body.pack(fill="both", expand=True, padx=14, pady=12)
 
         self.queue = MissionQueue()
+
+        # Tracks the mission currently being run (already popped off
+        # self.queue, so queue.total_runs() alone can't see it) - lets
+        # TOTAL RUNS keep counting down through the active mission's own
+        # runs instead of only changing when a whole task starts/finishes.
+        self._active_mission_running = False
+        self._active_mission_repeat_count = None
+        self._active_mission_progress = 0
+
         self._build_selections_card(body)
         self._build_task_list_card(body)
         self._build_status_card(body)
@@ -492,10 +489,9 @@ class LauncherUI:
         self.root.after(1000, self._tick_clock)
 
     def _refresh_shard_summary(self):
-        """Recomputes total banked / total target across every known
-        Trait Shard stage and updates the Status card - runs on its own
-        timer independent of whether a farm is currently active, so it
-        stays accurate even just sitting idle after a previous session."""
+        """Recomputes total banked/target across every stage and updates
+        the Status card - runs on its own timer, independent of whether
+        a farm is active."""
         total_banked = 0
         total_target = 0
         for key, label, default, progress_key in stage_data.shard_target_rows():
@@ -559,6 +555,14 @@ class LauncherUI:
             anchor="w", cursor="hand2"
         ).pack(fill="x", pady=(0, 10))
 
+        tk.Checkbutton(
+            inner, text="Anti-idle (Space-jump/mouse-nudge to prevent an AFK kick)",
+            variable=self.anti_idle_enabled_var, command=self._save_settings,
+            bg=CARD_BG, fg=TEXT_MAIN, selectcolor=FIELD_BG,
+            activebackground=CARD_BG, activeforeground=TEXT_MAIN, font=("Segoe UI", 9),
+            anchor="w", cursor="hand2"
+        ).pack(fill="x", pady=(0, 10))
+
         tk.Button(
             inner, text="TEST WEBHOOK", command=self.on_test_webhook,
             bg=FIELD_BG, fg=TEXT_MAIN, activebackground=BORDER, activeforeground=TEXT_MAIN,
@@ -581,6 +585,7 @@ class LauncherUI:
         existing.pop("discord_enabled", None)  # superseded by discord_notify_result
         existing["verbose_logging"] = self.verbose_logging_var.get()
         self._verbose_logging_cache = self.verbose_logging_var.get()
+        existing["anti_idle_enabled"] = self.anti_idle_enabled_var.get()
         save_settings(existing)
 
     def _build_shard_targets_card(self, body):
@@ -616,11 +621,8 @@ class LauncherUI:
         ).pack(fill="x", pady=(4, 0))
 
     def on_reset_all_shards(self):
-        """Wipes ALL banked Trait Shard progress, for every stage - the
-        same thing the daily 5pm-Pacific auto-reset does, but on demand.
-        A native Yes/No confirm dialog is the required second check
-        before anything actually gets cleared, since this can't be
-        undone."""
+        """Wipes all banked Trait Shard progress - same as the daily
+        auto-reset, but on demand. Confirms first since it can't be undone."""
         import tkinter.messagebox as messagebox
         confirmed = messagebox.askyesno(
             "Reset All Trait Shards",
@@ -681,10 +683,8 @@ class LauncherUI:
         ).pack(side="right", padx=(4, 0))
 
     def get_shard_target(self, key, default):
-        """Reads the current (possibly user-edited) target for a given
-        shard stage identity - falls back to the stage's default if the
-        field is blank/invalid, or if the Settings popup (where these
-        fields live) hasn't even been opened yet this session."""
+        """Current (possibly user-edited) target for a shard stage -
+        falls back to default if blank/invalid or Settings was never opened."""
         field_vars = getattr(self, "shard_target_field_vars", None)
         var = field_vars.get(key) if field_vars else None
         if var is None:
@@ -774,16 +774,17 @@ class LauncherUI:
             return var.get()
         return self._verbose_logging_cache
 
+    def is_anti_idle_enabled(self):
+        return self.anti_idle_enabled_var.get()
+
     def get_roblox_bbox(self):
         """Returns (left, top, width, height) of the docked Roblox
         window, or None if Roblox hasn't been found/docked yet."""
         return self.roblox_bbox
 
     def on_open_settings(self):
-        """Opens a standalone Settings window containing the Discord
-        webhook config and the per-stage Trait Shard target/manual-
-        progress controls - moved out of the main panel into their own
-        popup so the main panel stays compact."""
+        """Opens the standalone Settings window (Discord config + per-
+        stage shard target/manual-progress controls)."""
         if getattr(self, "_settings_win", None) is not None:
             try:
                 if self._settings_win.winfo_exists():
@@ -843,10 +844,8 @@ class LauncherUI:
         ).pack(fill="x", pady=(14, 0))
 
     def on_open_shard_tracker(self):
-        """Opens a standalone window listing every known Trait Shard
-        stage with its current banked total, target, and percentage -
-        auto-refreshing while open so it reflects live progress if a
-        farm is currently running in the background."""
+        """Opens a window listing every stage's banked total, target,
+        and percentage - auto-refreshes to reflect a live farm."""
         if getattr(self, "_shard_tracker_win", None) is not None:
             try:
                 if self._shard_tracker_win.winfo_exists():
@@ -1041,12 +1040,9 @@ class LauncherUI:
         self._refresh_queue_listbox()
 
     def on_auto_queue_trait_farm(self):
-        """Queues every known Trait Shard-dropping stage in one go, each
-        set to farm to its own target (read from the editable Trait
-        Shard Targets card, falling back to stage_data's real per-stage
-        caps). No run-count safety cap is applied - shard drops aren't
-        guaranteed every run, so capping attempts risks stopping short
-        of the target instead of just taking as many runs as it takes."""
+        """Queues every known shard-dropping stage, each farming to its
+        own target (Trait Shard Targets card, or stage_data's default).
+        No run-count cap - shard drops aren't guaranteed every run."""
         added = 0
 
         for challenge_key, challenge in stage_data.CHALLENGES.items():
@@ -1064,8 +1060,7 @@ class LauncherUI:
             if not raid["shard_stage"]:
                 continue
             target = self.get_shard_target(f"raid:{raid_key}", raid["shard_cap"])
-            # Raids with a difficulty screen (GT City, Eclipse) should be
-            # farmed on Hard - others don't need a difficulty set at all.
+            # Raids with a difficulty screen are farmed on Hard.
             raid_difficulty = "hard" if raid.get("has_difficulty") else None
             self.queue.add(Mission(
                 mode="Raid", repeat_count=None,
@@ -1119,9 +1114,51 @@ class LauncherUI:
                 self._render_task_row(index, mission)
 
         self.total_tasks_var.set(f"TOTAL TASKS:  {len(missions)}")
+        self._refresh_total_runs_label()
+
+    def _refresh_total_runs_label(self):
+        """Sum of repeat_count across still-queued missions, PLUS
+        whatever's left of the currently-running one - a mission is
+        popped off the queue the instant it starts, so queue.total_runs()
+        alone would drop that mission's whole count the moment it began,
+        before any of its runs had actually completed, and then stay
+        frozen there for the rest of the mission."""
         total = self.queue.total_runs()
-        suffix = "+" if self.queue.has_unlimited_mission() else ""
+        unlimited = self.queue.has_unlimited_mission()
+        if self._active_mission_running:
+            if self._active_mission_repeat_count is None:
+                unlimited = True  # shard-farming, or a blank Runs field - no numeric total to add
+            else:
+                total += max(0, self._active_mission_repeat_count - self._active_mission_progress)
+        suffix = "+" if unlimited else ""
         self.total_runs_var.set(f"TOTAL RUNS:  {total}{suffix}")
+
+    def start_mission_progress(self, repeat_count):
+        """Call once a mission is popped off the queue and starts
+        running - repeat_count is None for shard-farming missions and
+        blank-Runs fixed missions alike (neither has a numeric total)."""
+        self._active_mission_running = True
+        self._active_mission_repeat_count = repeat_count
+        self._active_mission_progress = 0
+        self._refresh_total_runs_label()
+
+    def update_mission_progress(self, run_number):
+        """Call after every victory/defeat screen for a fixed-repeat or
+        run-capped shard-farming mission, so TOTAL RUNS counts down
+        through it run-by-run instead of only changing when the whole
+        task starts or finishes."""
+        self._active_mission_progress = run_number
+        self._refresh_total_runs_label()
+
+    def end_mission_progress(self):
+        """Call once the active mission finishes, fails, or gets pushed
+        back onto the queue (Stop) - otherwise its now-stale remaining
+        count would double up with the full count push_front puts back
+        into the queue itself."""
+        self._active_mission_running = False
+        self._active_mission_repeat_count = None
+        self._active_mission_progress = 0
+        self._refresh_total_runs_label()
 
     # ---- Status / progress (called by launcher.py while running) ----
 
@@ -1294,12 +1331,9 @@ class LauncherUI:
         self.on_close_callback()
 
     def hide_ui(self):
-        """Withdraws all three windows that make up the UI (control panel,
-        log bar, title bar overlay) without stopping whatever's running -
-        useful for getting the panel out of the way. Since these windows
-        are overrideredirect (no taskbar entry to click back), the only
-        way back is toggle_ui_visibility (bound to a hotkey in
-        launcher.py)."""
+        """Withdraws the panel/log/title windows without stopping
+        anything running. No taskbar entry to click back - the only way
+        back is toggle_ui_visibility (a hotkey in launcher.py)."""
         if self._ui_hidden:
             return
         self._ui_hidden = True

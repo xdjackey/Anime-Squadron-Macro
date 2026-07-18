@@ -1,15 +1,11 @@
 """
 window_lock.py
 ----------------
-Utilities for finding, moving, and locking a window in place on Windows.
-Used to dock the Roblox window next to the macro's control panel and keep
-it from being dragged or resized while the macro is actively running.
+Finds, moves, and locks a window in place on Windows - used to dock
+Roblox next to the control panel and keep it from being dragged/resized
+while the macro runs.
 
-This is a separate file from the macro logic on purpose, so the
-window-docking feature can be reused, tested, or swapped out independently.
-
-Requires: pywin32   (pip install pywin32)
-Windows only - uses the Win32 API directly.
+Requires: pywin32. Windows only.
 """
 
 import threading
@@ -20,11 +16,10 @@ import win32con
 import win32process
 import win32api
 
-EDGE_OVERLAP = 8  # compensates for Windows' invisible resize-border margin -
-                   # used only to nudge a UI panel's position closer to the
-                   # docked window, never to change Roblox's own size/position
-                   # (which must stay identical between capture-time and
-                   # run-time, or captured icons drift out of alignment).
+# Compensates for Windows' invisible resize-border margin - only nudges
+# the UI panel's position, never Roblox's own size (which must stay
+# identical between capture-time and run-time or icons drift out of sync).
+EDGE_OVERLAP = 8
 
 GWL_STYLE = -16
 WS_CAPTION = 0x00C00000
@@ -39,15 +34,10 @@ _saved_styles = {}
 
 
 def remove_borders(hwnd):
-    """Strips the title bar and resize border off a window, so its outer
-    window rect and its actual client (content) area become identical.
-
-    NOT called automatically by dock_roblox() anymore - forcibly changing
-    another application's window style at the OS level turned out to be
-    risky in practice (it can desync the game's renderer from what
-    Windows thinks the window looks like). Kept here only in case you
-    specifically want it for a one-off experiment; call it yourself if so,
-    and watch closely for any instability."""
+    """Strips a window's title bar and resize border so its outer rect
+    equals its content area. NOT called by dock_roblox() anymore -
+    changing another app's window style turned out risky in practice;
+    kept only for manual one-off use."""
     style = win32gui.GetWindowLong(hwnd, GWL_STYLE)
     _saved_styles[hwnd] = style
     new_style = style & ~WS_CAPTION & ~WS_THICKFRAME & ~WS_BORDER
@@ -68,10 +58,9 @@ def restore_borders(hwnd):
 
 
 def titlebar_height():
-    """Returns the height (in pixels) of a standard window's title bar +
-    top border, for this system. Used to size a cosmetic overlay that
-    visually covers Roblox's title bar WITHOUT touching Roblox's window
-    itself - just drawing over it from a separate topmost window."""
+    """Height in pixels of a standard title bar + top border, for this
+    system - used to size a cosmetic overlay window that covers Roblox's
+    own title bar without touching Roblox itself."""
     SM_CYCAPTION = 4
     SM_CYSIZEFRAME = 33
     SM_CXPADDEDBORDER = 92
@@ -105,31 +94,38 @@ def find_window(title_substring):
     return result["hwnd"]
 
 
+def is_foreground(title_substring):
+    """True if the window currently focused/on top has title_substring in
+    its title (case-insensitive). A raw screen-region grab (mss) reads
+    whatever's rendered on screen at those coordinates regardless of what
+    window is supposed to be there - if the user tabs away to a browser
+    or another app that overlaps where Roblox was docked, a color/icon
+    scan would read THAT window's content instead of the game. Call this
+    before trusting a scan that could misfire on unrelated on-screen
+    content (e.g. any red/green pixels)."""
+    hwnd = win32gui.GetForegroundWindow()
+    if not hwnd:
+        return False
+    title = win32gui.GetWindowText(hwnd)
+    return bool(title) and title_substring.lower() in title.lower()
+
+
 def move_window(hwnd, x, y, width, height):
     """Move and resize a window to an exact position."""
     win32gui.MoveWindow(hwnd, x, y, width, height, True)
 
 
 def dock_roblox(ui_width, title_substring="Roblox", log_height=0):
-    """Finds the Roblox window and resizes/repositions it to fill the
-    screen minus a reserved strip on the right (for a UI panel) and,
-    optionally, a strip along the bottom.
+    """Resizes/repositions Roblox to fill the screen minus a strip on
+    the right (UI panel) and, optionally, the bottom (logs). Only
+    touches size/position, not window style.
 
-    Both capture_icons.py and launcher_ui.py call this SAME
-    function with the SAME ui_width/log_height, so the game window ends
-    up at the identical size/position in both cases. If capturing and
-    running ever use different window geometry, every captured icon
-    shifts relative to where the game actually draws it - which looks
-    like everything "not being detected" even though nothing about the
-    icons themselves is wrong.
-
-    This does NOT touch Roblox's window style/border - only its size and
-    position. Forcibly changing another application's window style at
-    the OS level turned out to be risky in practice.
+    capture_icons.py and launcher_ui.py must call this with the SAME
+    ui_width/log_height, or captured icons drift out of alignment with
+    where the game actually draws them.
 
     Returns (hwnd, roblox_width, roblox_height, screen_w, screen_h), or
-    (None, None, None, screen_w, screen_h) if the window wasn't found.
-    """
+    (None, None, None, screen_w, screen_h) if not found."""
     screen_w = win32api.GetSystemMetrics(0)
     screen_h = win32api.GetSystemMetrics(1)
 
@@ -144,19 +140,11 @@ def dock_roblox(ui_width, title_substring="Roblox", log_height=0):
 
 
 def bring_to_front(hwnd):
-    """Reliably brings a window to the foreground - but does nothing at
-    all if it's already the foreground window.
-
-    Windows normally blocks background processes from stealing focus
-    (SetForegroundWindow silently fails in that case - no exception, it
-    just doesn't work). The standard workaround is to temporarily attach
-    our input thread to the target window's thread, which grants
-    permission to switch focus - but that attach/detach synchronizes
-    input state between the two threads, and doing it repeatedly (e.g.
-    once per click) can cause visible hitches/freezes in the target app.
-    Checking first and skipping when focus is already correct avoids
-    that entirely in the common case.
-    """
+    """Reliably brings a window to the foreground; no-op if it already
+    is. Windows blocks background processes from stealing focus, so this
+    briefly attaches our input thread to the target's - skipped when
+    already focused, since doing that attach/detach on every call causes
+    visible hitches."""
     try:
         if win32gui.GetForegroundWindow() == hwnd:
             return  # already focused - nothing to do, avoid the attach entirely
@@ -182,16 +170,9 @@ def bring_to_front(hwnd):
 
 
 class WindowLock:
-    """Keeps a window pinned to a fixed position/size while active.
-
-    This doesn't disable Windows' native drag/resize - it works by
-    checking the window's actual position several times a second and
-    snapping it back immediately if it's changed. In practice this makes
-    the window feel "locked" since any drag gets reverted almost instantly.
-
-    Call start() to begin enforcing the position, stop() to release it
-    (the window becomes freely movable again).
-    """
+    """Keeps a window pinned to a fixed position/size while active, by
+    polling and snapping it back several times a second rather than
+    disabling drag/resize. start() begins enforcing, stop() releases it."""
 
     def __init__(self, hwnd, x, y, width, height, check_interval=0.15):
         self.hwnd = hwnd

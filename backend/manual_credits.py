@@ -1,20 +1,12 @@
 """
 manual_credits.py
 --------------------
-Lets you manually credit trait shards you earned WITHOUT the launcher
-tracking them - e.g. you played a stage by hand instead of running the
-farmer, or the launcher was closed while you kept playing.
+Lets you manually credit trait shards earned outside the launcher (e.g.
+played a stage by hand). Edit manual_shard_credits.json, type in a
+number next to a stage, save, then start the launcher - it adds that
+amount to tracked progress and resets the entry back to 0.
 
-Edit manual_shard_credits.json directly in any text editor: type in how
-many shards you got for a given stage, save the file, and the next time
-you START the launcher it adds that amount into the tracked progress
-for that stage and resets the file's number back to 0 (so it doesn't
-get applied again the following launch).
-
-The file is auto-created - with every known shard-dropping stage listed
-at 0 - the first time the launcher runs, so there's nothing to set up
-by hand; just open manual_shard_credits.json, fill in a number next to
-whichever stage you played, save, and start the launcher.
+The file is auto-created with every known stage at 0 on first run.
 """
 
 import json
@@ -48,11 +40,9 @@ def ensure_file_exists():
 
 
 def apply_credits(log=print):
-    """Reads manual_shard_credits.json, adds any nonzero amounts into
-    the real tracked progress for their matching stage, logs what
-    happened, and resets those entries back to 0 so they're not
-    re-applied on the next startup. Call this once, early, every time
-    the launcher starts."""
+    """Adds any nonzero amounts in manual_shard_credits.json into real
+    tracked progress, then resets those entries to 0. Call once at
+    startup."""
     ensure_file_exists()
 
     try:

@@ -1,15 +1,11 @@
 """
 compare_icons.py
 ------------------
-Tests SEVERAL icons against the current screen at once and prints their
-scores side by side, sorted highest first. Use this when you suspect two
-similar-looking icons (e.g. mode tabs, or Normal vs Hard) are being
-confused with each other - if their scores are close together, that
-confirms it.
+Tests several icons against the current screen at once and prints their
+scores side by side. Use it to check if similar-looking icons (mode
+tabs, Normal vs Hard, etc.) are being confused with each other.
 
-USAGE (from the repo root):
-  python checker/compare_icons.py mode_story mode_squadron mode_raid mode_challenge mode_invasion
-  python checker/compare_icons.py diff_normal diff_hard
+Usage: python checker/compare_icons.py <key1> <key2> ...
 """
 
 import os
@@ -44,9 +40,8 @@ def main():
         loc = f"({x}, {y})" if found else "-"
         print(f"{key:<20} {score:.3f}    {loc:<16} {marker}")
 
-    # Flag if any two results landed suspiciously close to the same spot -
-    # that's the real sign of confusion (both searches converging on the
-    # same button), as opposed to just having similar scores.
+    # Two icons matching the same spot is the real sign of confusion -
+    # not just having similar scores.
     close_pairs = []
     for i in range(len(results)):
         for j in range(i + 1, len(results)):

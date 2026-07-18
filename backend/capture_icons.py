@@ -1,22 +1,12 @@
 """
 capture_icons.py
 ----------------------------
-Walks you through taking a picture of every button/screen the
-launcher needs to recognize, one at a time. This only needs to be
-done once (or again if you switch to a different monitor).
+Walks you through capturing a picture of every button/screen the
+launcher needs to recognize, one at a time: it names what to get, you
+switch to the game and press Enter, then drag a box around it.
 
-For each item:
-  1. It tells you what to get on your screen.
-  2. You switch to the game, get it showing, come back and press Enter.
-  3. Drag a box around it with your mouse.
-
-Type 's' + Enter at any prompt to skip something you don't need yet
-(for example, skip Squadron/Raid/Challenge/Invasion pictures if you
-only play Story mode). You can run this again anytime to fill in
-skipped items, or to redo one that isn't working well - just capture
-the same item again and it'll overwrite the old picture.
-
-Needs: mss, pillow, pywin32 (these get installed with pip)
+Type 's' + Enter to skip anything you don't need yet. Safe to re-run
+anytime to fill in skipped items or redo a bad capture.
 """
 
 import os
@@ -33,22 +23,17 @@ import app_paths
 
 ASSETS_DIR = app_paths.path("launcher_assets")
 
-# Must match UI_WIDTH and LOG_HEIGHT in launcher_ui.py exactly - this is
-# what keeps capture-time and run-time window geometry identical.
+# Must match UI_WIDTH and LOG_HEIGHT in launcher_ui.py exactly, so
+# capture-time and run-time window geometry are identical.
 UI_WIDTH = 380
 LOG_HEIGHT = 200
 ROBLOX_TITLE = "Roblox"
 
-# (key, human description) - order matches the order you'll actually
-# encounter these on screen during a real run.
+# (key, human description), in the order you'll encounter them in a run.
 ITEMS = [
     ("menu_play", "the Play button on the main menu"),
-    ("lobby_screen", "OPTIONAL: some OTHER element that's only visible on the main menu/lobby - "
-                      "pick something different from menu_play itself (a different button, logo, "
-                      "or piece of text). This is a second, independent way to confirm you're back "
-                      "at the lobby - if menu_play alone ever fails to match (covered by something, "
-                      "borderline score), this backs it up instead of the whole farming queue "
-                      "stopping over one missed detection."),
+    ("lobby_screen", "OPTIONAL: a DIFFERENT lobby-only element (not menu_play) - a backup way "
+                      "to confirm you're at the lobby if menu_play alone ever misses."),
     ("create_room", "the Create Room button"),
     ("mode_story", "the Story mode tab/icon"),
     ("mode_squadron", "the Squadron mode tab/icon"),
@@ -56,8 +41,7 @@ ITEMS = [
     ("mode_challenge", "the Challenge mode tab/icon"),
     ("mode_invasion", "the Invasion mode tab/icon"),
     ("world_gt_city", "the GT City world entry - crop TIGHT around just the 'GT City' text, "
-                       "not the background thumbnail (worlds can share enough visual similarity "
-                       "in their background art to get confused with each other otherwise)"),
+                       "not the background thumbnail (worlds can look similar otherwise)"),
     ("world_marine_lobby", "the Marine Lobby world entry - same tight text-only crop"),
     ("world_ninja_village", "the Ninja Village world entry - same tight text-only crop"),
     ("world_eclipse_before", "the Eclipse (Before) world entry - same tight text-only crop"),
@@ -66,56 +50,46 @@ ITEMS = [
                              "to see it) - same tight text-only crop"),
 ]
 
-# Challenge / Raid / Invasion menu-selection icons - generated straight from
-# stage_data.py so this list can never drift out of sync with what the
-# dropdowns actually offer. Each is a text-only crop of that stage's name
-# button, same reasoning as the world/chapter crops above.
+# Challenge/Raid/Invasion icons, generated from stage_data.py so this
+# list can't drift out of sync with the dropdowns. Text-only crops.
 for _challenge_key, _challenge in stage_data.CHALLENGES.items():
     ITEMS.append((
         f"challenge_{_challenge_key}",
-        f"the '{_challenge['display']}' entry in the Challenge menu - crop TIGHT around just "
-        f"its name text, not the background/box"
+        f"the '{_challenge['display']}' entry in the Challenge menu - crop TIGHT to just its name text"
     ))
     for _stage in _challenge["stages"]:
         ITEMS.append((
             stage_data.challenge_stage_icon_key(_challenge_key, _stage),
-            f"the '{_stage}' stage entry under Challenge > {_challenge['display']} - crop TIGHT "
-            f"around just its name text, not the background/box"
+            f"the '{_stage}' stage under Challenge > {_challenge['display']} - crop TIGHT to just its name text"
         ))
 
 for _raid_key, _raid in stage_data.RAIDS.items():
     ITEMS.append((
         f"raid_{_raid_key}",
-        f"the '{_raid['display']}' entry in the Raid world-select menu - crop TIGHT around just "
-        f"its name text, not the background/box"
+        f"the '{_raid['display']}' entry in the Raid world-select menu - crop TIGHT to just its name text"
     ))
     for _stage in _raid["stages"]:
         ITEMS.append((
             stage_data.raid_stage_icon_key(_raid_key, _stage),
-            f"the '{_stage}' stage entry under Raid > {_raid['display']} - crop TIGHT around just "
-            f"its name text, not the background/box"
+            f"the '{_stage}' stage under Raid > {_raid['display']} - crop TIGHT to just its name text"
         ))
 
 for _inv_key, _inv in stage_data.INVASIONS.items():
     ITEMS.append((
         f"invasion_{_inv_key}",
-        f"the '{_inv['display']}' entry in the Invasion world-select menu - crop TIGHT around "
-        f"just its name text, not the background/box"
+        f"the '{_inv['display']}' entry in the Invasion world-select menu - crop TIGHT to just its name text"
     ))
     for _stage in _inv["stages"]:
         ITEMS.append((
             stage_data.invasion_stage_icon_key(_inv_key, _stage),
-            f"the '{_stage}' stage entry under Invasion > {_inv['display']} - crop TIGHT around "
-            f"just its name text, not the background/box"
+            f"the '{_stage}' stage under Invasion > {_inv['display']} - crop TIGHT to just its name text"
         ))
 
 ITEMS += [
     ("diff_normal", "the Normal difficulty icon/toggle"),
     ("diff_hard", "the Hard difficulty icon/toggle"),
-    ("chapter_1", "Chapter 1 - crop ONLY the digit '1' itself, nothing else - no "
-                  "'Chapter' text, no box, no background. The word 'Chapter' and the "
-                  "button box are IDENTICAL across every chapter, so including them "
-                  "dilutes the one thing that actually tells chapters apart: the digit."),
+    ("chapter_1", "Chapter 1 - crop ONLY the digit '1', nothing else (no 'Chapter' text, "
+                  "no box) - those are identical across every chapter, so only the digit tells them apart."),
     ("chapter_2", "Chapter 2 - crop ONLY the digit '2', same as above"),
     ("chapter_3", "Chapter 3 - crop ONLY the digit '3', same as above"),
     ("chapter_4", "Chapter 4 - crop ONLY the digit '4', same as above"),
@@ -128,40 +102,26 @@ ITEMS += [
     ("create_room_2", "the SECOND Create Room button - on the mode/world/chapter/difficulty "
                        "screen, after everything's picked (may look slightly different from the first one)"),
     ("start_button", "the Start button in the room, after Create Room has been pressed"),
-    ("victory_screen", "the VICTORY / result screen banner - crop TIGHT around JUST the word "
-                        "'Victory!' itself, cutting off as much of the green checkered background "
-                        "and jagged banner edges as you can. That background is nearly IDENTICAL "
-                        "to the Defeat banner's (just a different color), so if too much of it is "
-                        "included, a win can get misread as a loss or vice versa - the word itself "
-                        "needs to dominate the crop, not the shared banner chrome around it."),
-    ("defeat_screen", "the DEFEAT / result screen banner - same as above but for 'Defeat!': crop "
-                       "TIGHT around just that word, cutting off the red checkered background and "
-                       "banner edges as much as possible - that background nearly matches the "
-                       "Victory banner's, so a loose crop risks confusing the two."),
-    ("leave_button", "the Leave button on the result screen (red pill) that returns you to the "
-                      "main menu/lobby - crop TIGHT around just the word 'Leave', not the pill "
-                      "shape/background"),
-    ("settings_gear", "the gear/settings icon (should be visible on the result screen, and "
-                       "probably elsewhere too) that opens a settings menu - this is a FALLBACK "
-                       "path for returning to the lobby if Leave itself ever can't be clicked"),
-    ("return_to_lobby_button", "the 'Return to Lobby' button that appears INSIDE the settings "
-                                "menu after clicking the gear icon - open that menu first, then "
-                                "capture just this button"),
-    ("trait_shard_icon", "OPTIONAL (only needed if you plan to farm Trait Shards): the "
-                          "'Trait Shards' text label on a result screen showing a shard reward - "
-                          "crop tight around just that text. The x1/x2 pictures below search a "
-                          "small area right above wherever this is found, instead of the whole "
-                          "screen, so this needs to be captured first."),
-    ("trait_shard_x1", "OPTIONAL: get a result screen showing a Trait Shard drop of exactly "
-                        "'x1' - crop TIGHT around ONLY the 'x1' digit badge itself, no shard icon, "
-                        "no background, no 'Trait Shards' text. The icon/background shimmer and "
-                        "animate between frames, which hurts the match if included - the digit "
-                        "badge alone is the one part that stays visually consistent. This and "
-                        "trait_shard_x2 below replace needing any OCR/calibration step at all - "
-                        "shards only ever drop in amounts of 1 or 2, so just recognizing which of "
-                        "these two pictures is showing tells the launcher exactly how many dropped."),
-    ("trait_shard_x2", "OPTIONAL: same as above but for a drop of 'x2' - crop TIGHT around ONLY "
-                        "the 'x2' digit badge, nothing else."),
+    ("victory_screen", "the VICTORY banner - crop TIGHT around JUST the word 'Victory!', cutting "
+                        "off as much of the checkered background as you can (it's nearly identical "
+                        "to Defeat's, just a different color, so a loose crop risks confusing the two)."),
+    ("defeat_screen", "the DEFEAT banner - same as above but for 'Defeat!'."),
+    ("retry_button", "the Retry button on the result screen - crop TIGHT around just the word "
+                      "'Retry', not its background. Retry/Leave are used (instead of the Victory/"
+                      "Defeat banners) to detect that a match has ended, since they're more reliable."),
+    ("leave_button", "the Leave button on the result screen (red pill) - crop TIGHT around just "
+                      "the word 'Leave', not the pill shape/background"),
+    ("settings_gear", "the gear/settings icon on the result screen - fallback path for returning "
+                       "to the lobby if Leave can't be clicked"),
+    ("return_to_lobby_button", "the 'Return to Lobby' button INSIDE the settings menu - open that "
+                                "menu first, then capture just this button"),
+    ("trait_shard_icon", "OPTIONAL (only if farming Trait Shards): the 'Trait Shards' text label "
+                          "on a result screen showing a shard reward - crop tight around just that "
+                          "text. Capture this before x1/x2 below, which search near it."),
+    ("trait_shard_x1", "OPTIONAL: a result screen showing a Trait Shard drop of exactly 'x1' - "
+                        "crop TIGHT around ONLY the 'x1' digit badge, no icon/background/text "
+                        "(those shimmer/animate and hurt the match)."),
+    ("trait_shard_x2", "OPTIONAL: same as above but for a drop of 'x2'."),
 ]
 
 
@@ -246,8 +206,7 @@ def main():
               f"matching adapt automatically if you ever run the launcher on a different "
               f"monitor/resolution.\n")
 
-    # QoL: pass specific keys as arguments to jump straight to just those,
-    # instead of stepping through the whole list with 's' to skip each one.
+    # Pass specific keys as arguments to jump straight to just those:
     #   python backend/capture_icons.py chapter_8 chapter_9 start_button
     requested = sys.argv[1:]
     if requested:

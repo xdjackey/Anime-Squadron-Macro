@@ -19,11 +19,9 @@ import shard_progress
 @dataclass
 class Mission:
     mode: str                      # "Story", "Squadron", "Challenge", "Raid", "Invasion"
-    repeat_count: Optional[int] = None  # fixed-run missions: exact run count.
-                                     # shard-target missions: a SAFETY CAP on
-                                     # max attempts, in case OCR keeps missing
-                                     # and the target is never technically hit.
-                                     # None = no limit - run/farm until Stop is pressed.
+    # Fixed-run missions: exact run count. Shard-target missions: a safety
+    # cap on max attempts. None = no limit, run/farm until Stop.
+    repeat_count: Optional[int] = None
 
     # Story / Squadron
     world_key: Optional[str] = None
@@ -32,23 +30,20 @@ class Mission:
 
     # Challenge
     challenge_key: Optional[str] = None
-    challenge_stage: Optional[str] = None  # None if this challenge has no sub-stage (Daily/Regular)
+    challenge_stage: Optional[str] = None  # None if no sub-stage (Daily/Regular)
 
     # Raid
     raid_key: Optional[str] = None
     raid_stage: Optional[str] = None
 
-    # Invasion
+    # Invasion (difficulty above is reused here too)
     invasion_key: Optional[str] = None
     invasion_stage: Optional[str] = None
-    # difficulty (above) is reused for Invasion too
 
     shard_farming: bool = False         # True = this mission farms Trait Shards
-    shard_target: Optional[int] = None  # if set (and shard_farming), farm until
-                                         # cumulative trait shards >= this (may
-                                         # overshoot by a run's worth). If None
-                                         # while shard_farming is True, farm with
-                                         # no numeric target - runs until Stop.
+    # Farm until banked shards >= this (may overshoot by a run). None while
+    # shard_farming = farm with no target, until Stop.
+    shard_target: Optional[int] = None
 
     def label(self):
         """Short human-readable summary for the queue list box - uses
@@ -118,9 +113,8 @@ class MissionQueue:
         return self._missions.pop(0)
 
     def push_front(self, mission: Mission):
-        """Puts a mission back at the FRONT of the queue - used when a
-        mission is interrupted by Stop partway through, so the next
-        Start picks up that same mission first instead of skipping it."""
+        """Puts a mission back at the front of the queue - used when
+        Stop interrupts it partway through, so Start resumes it first."""
         self._missions.insert(0, mission)
 
     def move_up(self, index: int):
@@ -134,10 +128,8 @@ class MissionQueue:
                 self._missions[index], self._missions[index + 1]
 
     def total_runs(self):
-        """Sum of repeat_count across all queued missions, treating
-        unlimited (None) missions as contributing 0 to the total - see
-        has_unlimited_mission() to detect that case and label the total
-        accordingly (e.g. '60+') rather than showing a falsely-exact number."""
+        """Sum of repeat_count across all queued missions - unlimited
+        (None) missions count as 0; see has_unlimited_mission()."""
         return sum(m.repeat_count for m in self._missions if m.repeat_count is not None)
 
     def has_unlimited_mission(self):

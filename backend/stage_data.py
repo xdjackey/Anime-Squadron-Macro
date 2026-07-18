@@ -47,12 +47,9 @@ SQUADRON_CHAPTER_COUNTS = {
     "infinity_train": 4,
 }
 
-# ---- Challenge: each entry is its own self-contained challenge. Some
-# (Daily/Regular) have no further stage selection - you just click the
-# challenge and go. Others (Katakara Bridge, The Hero Hunter) have ONE
-# named stage you click after selecting the challenge, and that stage is
-# what actually drops Trait Shards. Same shape as RAIDS/INVASIONS below,
-# just with 0 or 1 stages instead of always 4. ----
+# ---- Challenge: some (Daily/Regular) have no stage selection - just
+# click and go. Others (Katakara Bridge, Hero Hunter) have one named
+# stage that drops Trait Shards. ----
 CHALLENGES = {
     "daily_challenge": {"display": "Daily Challenge", "stages": [], "shard_stage": None, "shard_cap": None},
     "regular_challenge": {"display": "Regular Challenge", "stages": [], "shard_stage": None, "shard_cap": None},
@@ -66,13 +63,12 @@ CHALLENGES = {
         "display": "The Hero Hunter",
         "stages": ["The Hero Hunter Awakens"],
         "shard_stage": "The Hero Hunter Awakens",
-        "shard_cap": 30,  # this one maxes out at 30/day, unlike the other shard stages
+        "shard_cap": 30,  # caps at 30/day, unlike the other shard stages
     },
 }
 
-# ---- Raid: each raid world has a fixed, ordered list of named stages.
-# shard_stage is the ONE stage in that world's list that drops Trait
-# Shards, or None if that raid world has no shard-dropping stage. ----
+# ---- Raid: shard_stage is the one stage per world that drops Trait
+# Shards, or None if that world has none. ----
 RAIDS = {
     "gt_city": {
         "display": "GT City",
@@ -98,11 +94,8 @@ RAIDS = {
 }
 
 # ---- Invasion: same shape as Raid, plus difficulty. shard_caps is
-# informational only (the game's own per-difficulty daily cap) - the
-# launcher doesn't need to enforce it, since OCR-based shard farming
-# just stops once THAT task's own shard_target is reached regardless
-# of difficulty; running Normal and Hard as two separate queued tasks
-# with targets of 40 and 60 respectively reproduces the split. ----
+# informational only (the game's own per-difficulty daily cap) - queue
+# Normal and Hard as separate tasks with those targets to reproduce it. ----
 INVASIONS = {
     "lava_continent": {
         "display": "The Lava Continent",
@@ -114,11 +107,9 @@ INVASIONS = {
 
 
 def shard_stage_key(mode, **kwargs):
-    """Canonical identity string for a shard-farming stage - the SAME
-    format shard_progress.py uses to persist progress per stage. Having
-    both the settings UI and the farming logic build this key from the
-    same function means they can never drift out of sync with each
-    other."""
+    """Canonical identity string for a shard-farming stage - same format
+    shard_progress.py persists under, so the settings UI and the farming
+    logic can never drift apart."""
     mode = mode.lower()
     if mode == "challenge":
         return f"challenge:{kwargs['challenge_key']}:{kwargs['challenge_stage']}"
@@ -130,14 +121,9 @@ def shard_stage_key(mode, **kwargs):
 
 
 def shard_target_rows():
-    """Enumerates every known Trait Shard-dropping stage as an editable
-    row: (settings_key, label, default_target, progress_key). ui.py
-    uses this to build one target field AND one manual-progress field
-    per stage - progress_key is the exact key shard_progress.py stores
-    that stage's banked total under, so the settings UI can read/adjust
-    the SAME saved value the launcher uses when farming. Order matches
-    the intended farming sequence (Challenge, then Raid, then Invasion
-    Normal before Hard)."""
+    """Every known Trait Shard-dropping stage as an editable row:
+    (settings_key, label, default_target, progress_key) - ui.py uses
+    this to build one target + manual-progress field per stage."""
     rows = []
     for challenge_key, challenge in CHALLENGES.items():
         if challenge["shard_stage"]:

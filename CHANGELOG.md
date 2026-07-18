@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.6.9
+
+### ✨ Added
+- ⏸️ Anti-idle toggle in Settings - off by default. When on, nudges the
+  mouse every 10 minutes while idle, or presses Space (jump) every 30
+  seconds while a task is actively running.
+
+### 🔧 Fixed
+- 🏆 Results screen detection no longer relies solely on the Victory/Defeat
+  banner - Retry/Leave buttons (or the banner icons, as a backup) confirm
+  the results screen is up, so a level-up toast covering either one no
+  longer times out and aborts the mission.
+- 🎨 Victory/Defeat outcome is now read from the banner's color in a small
+  dedicated region, only after the results screen is already confirmed -
+  never used to detect the results screen itself, and returns "unknown"
+  instead of assuming a defeat when the read is unclear.
+- 🔍 Roblox window focus is verified before any raw-pixel screen scan
+  (color detection, anti-idle Space press) - window lookup matches by
+  title substring, so another open window that happens to contain
+  "Roblox" in its title (a browser tab, etc.) could previously get
+  scanned or focused by mistake.
+- 💎 Trait shard count no longer double-counts an unrelated reward badge
+  elsewhere on the results screen - the "x1"/"x2" count badge now has to
+  be near the "Trait Shards" label to count, instead of matching anywhere
+  in the window.
+- 📸 Discord result screenshot now fires the instant the results screen is
+  confirmed, instead of after the (up to 5 second) shard scan -
+  screenshots no longer arrive showing whatever the game had already
+  moved on to.
+- 🔁 Leave-button lobby confirmation now retries 5 times instead of 3.
+- 🔢 TOTAL RUNS in the task list now counts down live through the
+  currently-running mission's own runs, instead of only changing when a
+  whole mission starts or finishes.
+
 ## v1.6.5
 
 ### ✨ Added

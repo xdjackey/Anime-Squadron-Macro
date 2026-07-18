@@ -1,24 +1,16 @@
 """
 mouse.py
 ---------
-Mouse input only - no screen detection logic lives here (see screen.py
-for that). Uses the Windows SendInput API directly with absolute screen
-coordinates (not pyautogui).
+Mouse input only - screen detection lives in screen.py. Uses Windows
+SendInput directly with absolute coordinates (no pyautogui).
 
-Movement is smoothed (several small steps with an easing curve) rather
-than an instant teleport - this both looks more natural AND generates
-real intermediate mouse-move events along the way, which some UIs (Roblox
-included) use to detect genuine hover rather than a cursor that just
-appeared at a location. Scrolling breaks a big scroll amount into several
-smaller wheel ticks for the same reason - one huge wheel delta can
-overshoot or get handled less reliably than a few natural-feeling ticks.
+Moves are smoothed across several steps rather than teleporting, since
+some UIs (Roblox included) need real intermediate move events to
+register hover. Scrolls are similarly broken into smaller ticks. Click
+jitter rotates through a small fixed set of offsets (not random) so
+repeated clicks on the same target land at different but predictable
+nearby spots.
 
-Jitter is retry-based, not purely random: each call rotates through a
-small fixed set of pixel offsets and grows slightly with the retry
-number, so repeated attempts at the same target land at different but
-predictable nearby spots.
-
-Requires: nothing beyond the standard library (ctypes) - no pyautogui.
 Windows only.
 """
 
@@ -29,11 +21,8 @@ import time
 
 user32 = ctypes.windll.user32
 
-# All real hardware input (moves, clicks, scrolls) goes through this lock.
-# Without it, a background anti-idle nudge firing at the same instant the
-# main automation is mid-click could interleave two unrelated mouse
-# movements/clicks - this just makes sure only one "action" ever touches
-# the real cursor at a time, regardless of which thread it's called from.
+# Serializes all real mouse input so an anti-idle nudge can't interleave
+# with the main automation mid-click.
 _action_lock = threading.Lock()
 
 INPUT_MOUSE = 0
@@ -97,12 +86,9 @@ def _move_to_raw(x, y):
 
 
 def _move_smooth(x, y, duration=0.15, steps=14):
-    """Moves the cursor from wherever it currently is to (x, y) across
-    several intermediate steps with an ease-out curve (fast start, slow
-    finish), instead of one instant jump. This generates real mouse-move
-    events along the path - a single teleport skips those entirely,
-    which is part of why some hover-dependent UI buttons weren't
-    registering clicks reliably."""
+    """Moves the cursor to (x, y) across several ease-out steps instead
+    of one jump, so real mouse-move events fire along the path (needed
+    for hover-dependent UI buttons)."""
     start_x, start_y = _get_cursor_pos()
     if steps <= 1:
         _move_to_raw(x, y)
@@ -135,10 +121,8 @@ def _scroll_tick(amount):
     _send_input(inp)
 
 
-# Retry-based jitter: rotates through 4 directions rather than picking
-# randomly, and nudges further out the more retries have happened. This
-# is deliberately called on every click (not just retries) so consecutive
-# clicks on different buttons also don't all land pixel-identical.
+# Rotates through 4 directions (not random), nudging further out with
+# more retries - called on every click so clicks don't land pixel-identical.
 _click_count = 0
 _OFFSETS = [(1, 0), (0, -1), (-1, 0), (0, 1)]
 
@@ -161,39 +145,26 @@ def _jitter_offset(retry=0):
 
 
 def get_cursor_position():
-    """Public wrapper around the current cursor position - used by the
-    anti-idle feature to remember where to put the cursor back."""
+    """Current cursor position - used by anti-idle to restore it after."""
     return _get_cursor_pos()
 
 
 def move_only(x, y):
-    """Smoothly moves the cursor to (x, y) WITHOUT clicking - use this to
-    hover over a scrollable list before scrolling it, since the mouse
-    wheel affects whatever's under the cursor's CURRENT position. If the
-    cursor is still sitting wherever the last click happened (a
-    different list/column entirely), scrolling silently does nothing to
-    the list you actually meant to scroll."""
+    """Smoothly moves the cursor to (x, y) without clicking - use before
+    scrolling a list, since the wheel affects whatever's under the
+    cursor's current position."""
     with _action_lock:
         _move_smooth(x, y)
 
 
 def click_at(x, y, retry=0, clicks=1, between_clicks_pause=0.25, pre_click_pause=0.45, move_duration=0.15):
-    """Smoothly moves to (x, y) - offset by a small retry-based jitter -
-    and clicks. By default waits after moving before pressing so any
-    hover/highlight animation the target plays (many Roblox UI buttons
-    visibly grow/glow on hover before they'll register a click) has time
-    to finish. Set clicks > 1 to press multiple times in a row.
+    """Smoothly moves to (x, y) (offset by retry jitter) and clicks. By
+    default waits after moving so hover/highlight animations finish
+    first. Set clicks > 1 to press multiple times.
 
-    pre_click_pause: override the post-move wait. Buttons that don't
-    depend on a hover animation to register - or that need to be hit
-    before something else on a timer (e.g. clicking Leave before an
-    auto-replay kicks back in) - can pass a much smaller value here, or
-    0, to click as fast as possible.
-
-    move_duration: override how long the cursor takes to glide to the
-    target. Lower this alongside pre_click_pause for the same
-    time-critical clicks - no point clicking instantly if the mouse
-    itself takes 150ms to arrive."""
+    pre_click_pause/move_duration: lower or zero these for time-critical
+    clicks that don't need to wait on a hover animation (e.g. clicking
+    Leave before auto-replay kicks in)."""
     with _action_lock:
         jx, jy = _jitter_offset(retry)
         _move_smooth(x + jx, y + jy, duration=move_duration)
@@ -208,14 +179,10 @@ def click_at(x, y, retry=0, clicks=1, between_clicks_pause=0.25, pre_click_pause
 
 
 def jitter_and_click(offset=(15, 15), pre_click_pause=0.1, settle_pause=0.2):
-    """Anti-idle nudge: remembers the current cursor position, moves a
-    small distance away, clicks once, then moves the cursor back to
-    EXACTLY where it started. Meant to be called periodically (e.g.
-    every ~10 minutes) while nothing else is happening, purely to keep
-    the game from treating the session as AFK - the click lands wherever
-    the cursor already was plus a small offset, so callers should only
-    trigger this when the cursor is known to be resting somewhere
-    harmless (e.g. the lobby, not mid-menu over a real button)."""
+    """Anti-idle nudge: moves a small distance from the current cursor
+    position, clicks once, then moves back exactly to where it started.
+    Only trigger this when the cursor is resting somewhere harmless
+    (e.g. the lobby), since the click lands near wherever it already was."""
     with _action_lock:
         orig_x, orig_y = _get_cursor_pos()
         jx, jy = offset
@@ -230,11 +197,9 @@ def jitter_and_click(offset=(15, 15), pre_click_pause=0.1, settle_pause=0.2):
 
 
 def scroll(amount, steps=5, step_pause=0.04):
-    """Scrolls the mouse wheel at its current position. Negative = down,
-    positive = up. Breaks the total amount into several smaller ticks
-    with brief pauses between them instead of one big jump - this reads
-    as a more natural scroll gesture and tends to be handled more
-    reliably by scrollable UI lists than a single large wheel delta."""
+    """Scrolls at the cursor's current position (negative = down). Breaks
+    the total into several smaller ticks instead of one big jump - reads
+    as a more natural gesture and scrollable lists handle it better."""
     with _action_lock:
         steps = max(1, steps)
         per_tick = int(amount / steps)

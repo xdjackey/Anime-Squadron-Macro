@@ -1,19 +1,11 @@
 """
 check_icon.py
 --------------
-Diagnostic tool: tests ONE icon against whatever is on your screen right
-now, without clicking anything. Use this to figure out whether a failing
-icon is (a) genuinely not on screen yet at that point, (b) a bad/loose
-capture, or (c) just barely below the threshold.
+Tests ONE icon against your current screen, without clicking - use it to
+see why an icon isn't matching.
 
-USAGE:
-  1. Manually get your game to the exact screen where the icon SHOULD be
-     visible (e.g. click Create Room yourself and wait for it to load).
-  2. Run (from the repo root):
-       python checker/check_icon.py create_room
-  3. Read the score it prints.
-
-Requires: mss, numpy, opencv-python
+Usage: get the game to the right screen first, then run
+    python checker/check_icon.py <icon_key>
 """
 
 import os

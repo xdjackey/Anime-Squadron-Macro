@@ -1,15 +1,11 @@
 """
 reset_clock.py
 -----------------
-Keeps track of when the game's Trait Shards reset for the day (5pm
-Pacific time by default) and notices exactly once per day when that
-happens, so the tracked shard totals can be cleared automatically
-right when the game itself resets - not just once whenever the app
-happens to be opened.
+Notices exactly once per day when the game's Trait Shards reset (5pm
+Pacific), so tracked totals clear right on time, not just whenever the
+app happens to be open. Handles DST automatically.
 
-This correctly handles Daylight Saving Time changes on its own. On
-Windows, if the clock ever shows an error about missing timezone
-info, just run:  pip install tzdata
+If the clock errors about missing timezone info: pip install tzdata
 """
 
 import json
@@ -87,9 +83,7 @@ def _load_last_reset_marker():
 def _save_last_reset_marker(boundary_iso):
     with open(STATE_FILE, "w") as f:
         json.dump({"last_reset_boundary": boundary_iso}, f, indent=2)
-    # Read it back to actually confirm the save took - a silent failure
-    # here would mean the reset never gets "remembered" as handled and
-    # could otherwise go unnoticed.
+    # Read back to confirm the save actually took.
     saved = _load_last_reset_marker()
     if saved != boundary_iso:
         raise RuntimeError(
@@ -99,13 +93,9 @@ def _save_last_reset_marker(boundary_iso):
 
 
 def check_and_consume_reset():
-    """Call this periodically (e.g. every 30s). Returns True exactly
-    once per actual reset boundary crossed - the first call after 5pm
-    Pacific on a given day returns True (and remembers that boundary as
-    handled); every other call returns False until the NEXT day's
-    reset boundary passes. Returns False (never triggers) if timezone
-    info isn't available, rather than guessing wrong and clearing
-    progress at an incorrect time."""
+    """Call periodically (e.g. every 30s). Returns True exactly once per
+    reset boundary crossed, False otherwise - including when timezone
+    info isn't available, rather than guessing wrong."""
     now = get_reset_timezone_time()
     if now is None:
         return False

@@ -16,9 +16,8 @@ from PIL import Image
 
 
 def _capture_region(bbox):
-    """bbox is (left, top, width, height) in absolute screen coordinates -
-    this should be the Roblox window's own rect, not the full monitor,
-    so the control panel/logs never end up in the screenshot."""
+    """bbox is (left, top, width, height) - pass Roblox's own window
+    rect, not the full monitor, so the panel/logs stay out of the shot."""
     left, top, width, height = bbox
     with mss.mss() as sct:
         region = {"left": left, "top": top, "width": width, "height": height}
@@ -30,26 +29,7 @@ def _capture_region(bbox):
     return buf
 
 
-def send_screenshot(webhook_url, bbox, message=None, log=print):
-    """Captures the given screen region and posts it to a Discord
-    webhook as an image attachment, with an optional text message.
-    Runs synchronously (blocks on the network call) - use
-    send_screenshot_async from the automation thread so a slow upload
-    can't stall the actual mission sequence.
-
-    Returns True on success, False on any failure (missing URL, capture
-    error, or a non-2xx response from Discord) - failures are logged,
-    not raised, since a missed screenshot shouldn't abort a mission."""
-    if not webhook_url:
-        log("[discord] No webhook URL set - skipping screenshot.")
-        return False
-
-    try:
-        buf = _capture_region(bbox)
-    except Exception as e:
-        log(f"[discord] Couldn't capture the Roblox window: {e}")
-        return False
-
+def _upload_screenshot(webhook_url, buf, message, log):
     try:
         files = {"file": ("roblox.png", buf, "image/png")}
         data = {"content": message} if message else {}
@@ -63,12 +43,43 @@ def send_screenshot(webhook_url, bbox, message=None, log=print):
         return False
 
 
+def send_screenshot(webhook_url, bbox, message=None, log=print):
+    """Captures bbox and posts it to a Discord webhook as an image, with
+    an optional message. Runs synchronously - use send_screenshot_async
+    from the automation thread. Returns True/False; never raises."""
+    if not webhook_url:
+        log("[discord] No webhook URL set - skipping screenshot.")
+        return False
+
+    try:
+        buf = _capture_region(bbox)
+    except Exception as e:
+        log(f"[discord] Couldn't capture the Roblox window: {e}")
+        return False
+
+    return _upload_screenshot(webhook_url, buf, message, log)
+
+
 def send_screenshot_async(webhook_url, bbox, message=None, log=print):
-    """Fire-and-forget version of send_screenshot - runs the capture and
-    upload on a background thread so the caller (the automation loop)
-    doesn't wait on a Discord network round-trip between runs."""
+    """Captures bbox IMMEDIATELY, on the calling thread - only the
+    (slow) network upload is deferred to a background thread.
+
+    This matters: the caller confirms the results screen, then calls
+    this, then goes on to read trait shards and let the game auto-
+    replay into the NEXT match - all within a few seconds. Capturing on
+    a background thread meant the actual mss.grab() didn't happen until
+    that thread got scheduled, which could land AFTER the next match had
+    already started, screenshotting the wrong thing entirely."""
+    if not webhook_url:
+        log("[discord] No webhook URL set - skipping screenshot.")
+        return
+    try:
+        buf = _capture_region(bbox)
+    except Exception as e:
+        log(f"[discord] Couldn't capture the Roblox window: {e}")
+        return
     threading.Thread(
-        target=send_screenshot, args=(webhook_url, bbox, message, log), daemon=True,
+        target=_upload_screenshot, args=(webhook_url, buf, message, log), daemon=True,
     ).start()
 
 

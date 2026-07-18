@@ -1,18 +1,9 @@
 """
 click_logger.py
 ------------------
-Logs every mouse click (position + timestamp) to a running list in its
-own window. Run this in a SEPARATE terminal while you test the launcher -
-it keeps logging every click (yours or the script's) until you stop it
-with Ctrl+C.
-
-Use this to compare:
-  - Where you click manually vs. where the log says the script clicked
-  - Whether a click even registered as a click at all (sometimes an
-    attempted click doesn't generate an OS-level click event at all,
-    which is a different problem than "clicked but the game ignored it")
-
-Requires: pynput   (pip install pynput)
+Prints every mouse click (position + timestamp) as it happens. Run in a
+separate terminal while testing the launcher, to see where clicks (yours
+or the script's) actually land. Ctrl+C to stop.
 """
 
 import time

@@ -2,20 +2,12 @@
 display_info.py
 ------------------
 Detects monitor resolution and Windows DPI scaling, and looks up the
-CURRENT Roblox window's rect on demand. This is the foundation that
-makes calibration resolution-independent: leave_position.py stores the
-Leave button as a FRACTION of the Roblox window's size/position (not
-fixed pixels), and trait_shard.py stores the shard-count crop as a
-FRACTION of the matched icon's own size - both convert back to the
-right absolute pixels using whatever the window/icon actually measures
-right now, on whatever monitor it's running on.
+current Roblox window's rect on demand - the fraction-based coordinates
+used elsewhere (leave_position.py, trait_shard.py) convert off this.
 
-None of this works if Windows display scaling isn't 100% - scaling
-changes how reported pixel coordinates relate to what's physically on
-screen, in ways that throw off both clicks and template matching
-regardless of any fraction-based math. check_scaling() exists to catch
-that early with a clear message, since a silent mismatch here is a
-frustrating thing to debug blind.
+Windows display scaling must be 100% or clicks/detection break
+regardless of any fraction-based math - check_scaling() catches that
+early with a clear message.
 """
 
 import ctypes

@@ -1,14 +1,9 @@
 """
 shard_progress.py
 --------------------
-Saves your trait-shard farming progress to a file, tracked separately
-for each specific stage. This is what lets you stop a shard-farming
-task partway through and pick it back up later - even after closing
-the app completely - without losing the shards you already banked.
-
-Once a stage's target is actually reached, its saved progress gets
-cleared, so farming that same stage again later starts fresh at 0
-instead of thinking it's already done.
+Saves trait-shard farming progress per stage, so a task can be stopped
+and resumed later without losing banked shards. Progress clears once a
+stage's target is reached, so farming it again starts fresh at 0.
 """
 
 import json
@@ -39,10 +34,8 @@ def _save_all(data):
 
 
 def stage_key(mission):
-    """Builds a stable identity string for a shard-farming mission's
-    exact stage, so saved progress can be looked up regardless of what
-    order things are queued in or how many times the app's been
-    reopened since."""
+    """Stable identity string for a mission's exact stage, used to look
+    up its saved progress."""
     mode = mission.mode
     if mode == "Challenge":
         return stage_data.shard_stage_key("challenge", challenge_key=mission.challenge_key,
@@ -56,29 +49,25 @@ def stage_key(mission):
 
 
 def get_progress(mission):
-    """Returns the shard count already banked for this exact stage, or
-    0 if there's nothing saved yet."""
+    """Shard count already banked for this stage, or 0."""
     return get_progress_by_key(stage_key(mission))
 
 
 def set_progress(mission, total_shards):
-    """Saves the running total for this stage - call this after every
-    single run's shard count is added in, not just at the end, so a
-    forced-quit or crash loses at most one run's worth of progress."""
+    """Saves the running total - call after every run, not just at the
+    end, so a crash loses at most one run's progress."""
     set_progress_by_key(stage_key(mission), total_shards)
 
 
 def clear_progress(mission):
     """Wipes saved progress for this stage - call once its target is
-    actually reached, so farming it again later starts at 0 instead of
-    immediately reporting 'already done'."""
+    reached, so farming it again starts at 0."""
     clear_progress_by_key(stage_key(mission))
 
 
 def get_progress_by_key(key):
-    """Same as get_progress, but takes the raw identity string directly
-    - used by the settings UI, which knows a stage's key (from
-    stage_data.shard_target_rows()) without needing a full Mission."""
+    """Same as get_progress, but takes the raw key directly - used by
+    the settings UI, which doesn't have a full Mission."""
     return _load_all().get(key, 0)
 
 
@@ -96,6 +85,6 @@ def clear_progress_by_key(key):
 
 
 def clear_all():
-    """Wipes ALL saved shard progress, for every stage - used by the
-    daily auto-reset and the manual 'Reset All Trait Shards' button."""
+    """Wipes saved progress for every stage - used by the daily auto-
+    reset and the manual 'Reset All Trait Shards' button."""
     _save_all({})

@@ -1,23 +1,16 @@
 """
 auto_update.py
 -----------------
-Checks GitHub for a newer release of this app on startup, and - if the
-user agrees - downloads the new .exe and swaps it in for the one
-currently running.
+Checks GitHub for a newer release on startup and, if the user agrees,
+downloads the new .exe and swaps it in for the running one.
 
-Windows won't let a running .exe overwrite itself, so the actual swap
-happens via a small batch script: it waits for this process to fully
-exit, replaces the old .exe with the newly-downloaded one, relaunches
-it, then deletes itself. launcher.py is responsible for shutting the
-app down cleanly (closing the UI, unhooking hotkeys) right after
-calling launch_swap_script() here, so the process actually exits and
-the script's wait-loop can proceed.
+Windows won't let a running .exe overwrite itself, so the swap happens
+via a batch script: wait for this process to exit, replace the old exe,
+relaunch, delete itself. launcher.py must shut the app down right after
+calling launch_swap_script() so the process actually exits.
 
-Only does anything when running as a packaged .exe (sys.frozen) -
-there's nothing to self-update when running from plain source.
-
-Bump CURRENT_VERSION here every time a new release is tagged/published -
-this is the only place that number lives.
+Only runs when packaged (sys.frozen) - nothing to update from source.
+Bump CURRENT_VERSION here every release; it's the only place it lives.
 """
 
 import json
@@ -28,7 +21,7 @@ import tempfile
 import threading
 import urllib.request
 
-CURRENT_VERSION = "1.6.5"
+CURRENT_VERSION = "1.6.9"
 REPO = "xdjackey/Anime-Squadron-Macro"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 ASSET_NAME = "AnimeSquadronMacro.exe"
@@ -49,10 +42,8 @@ def _parse_version(v):
 
 def check_for_update(log=print):
     """Hits the GitHub releases API once. Returns (version, download_url)
-    if a newer release is available, or None if already up to date, the
-    check failed (no internet, GitHub unreachable, rate-limited), or the
-    release has no matching .exe asset attached. Never raises - a failed
-    check should never stop the app from starting normally."""
+    if newer, else None (up to date, check failed, or no matching asset).
+    Never raises."""
     try:
         req = urllib.request.Request(API_URL, headers={"Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
@@ -74,11 +65,9 @@ def check_for_update(log=print):
 
 
 def check_for_update_async(on_update_found, log=print):
-    """Runs check_for_update() on a background thread so it can never
-    delay app startup. Calls on_update_found(version, url) FROM THAT
-    BACKGROUND THREAD if an update is available - the caller must hop
-    back to the main thread (e.g. root.after) before touching any UI
-    from it."""
+    """Runs check_for_update() on a background thread. Calls
+    on_update_found(version, url) from THAT thread if found - caller
+    must hop back to the main thread before touching any UI."""
     def worker():
         result = check_for_update(log=log)
         if result:
@@ -87,9 +76,9 @@ def check_for_update_async(on_update_found, log=print):
 
 
 def download_update(download_url, log=print):
-    """Downloads the new .exe to the same folder as the current one
-    (named *_new.exe - doesn't touch the running one) and returns its
-    path. Raises on failure; the caller decides how to report that."""
+    """Downloads the new .exe next to the current one as *_new.exe
+    (doesn't touch the running one) and returns its path. Raises on
+    failure."""
     if not getattr(sys, "frozen", False):
         raise RuntimeError("not running as a packaged .exe - nothing to update")
 
@@ -120,13 +109,10 @@ def download_update(download_url, log=print):
 
 
 def launch_swap_script(new_exe_path, log=print):
-    """Writes a small batch script that waits for THIS process to exit,
-    replaces the running .exe with the newly-downloaded one, relaunches
-    it, then deletes itself - and launches that script detached (so it
-    keeps running after this process exits). Does NOT exit this process
-    itself - the caller must shut the app down cleanly right after
-    calling this (see LauncherApp.on_close), so the process actually
-    exits and the script's wait-loop can proceed."""
+    """Writes and launches (detached) a batch script that waits for this
+    process to exit, replaces the exe, relaunches, then deletes itself.
+    Does NOT exit this process - the caller must shut down right after
+    calling this (see LauncherApp.on_close)."""
     current_exe = sys.executable
     pid = os.getpid()
 

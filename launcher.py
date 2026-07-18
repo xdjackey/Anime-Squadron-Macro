@@ -1,22 +1,17 @@
 """
 launcher.py
 -----------
-This is the main file you run - it's the brain of the whole app.
-
-The visual look of the app (windows, buttons, colors) lives in ui/ui.py.
-The actual automation/game-logic modules live in backend/. This file
-handles everything behind the scenes: asking Windows for admin
-permission, the F6/F7 keyboard shortcuts, starting/stopping, keeping
-Roblox in focus, and walking through each mission step by step.
+The main file you run - the brain of the app. UI lives in ui/ui.py,
+automation/game-logic in backend/. This file handles admin permission,
+F6/F7 hotkeys, start/stop, keeping Roblox in focus, and walking through
+each mission.
 """
 
 import os
 import sys
 
-# backend/ and ui/ modules import each other by plain name (e.g.
-# "import stage_data"), so both folders need to be on sys.path before
-# anything below is imported - done here, first, rather than turning
-# every file in the project into a proper nested package.
+# backend/ and ui/ import each other by plain name, so both need to be
+# on sys.path before anything below is imported.
 _ROOT = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 for _sub in ("backend", "ui"):
     sys.path.insert(0, os.path.join(_ROOT, _sub))
@@ -32,43 +27,51 @@ import screen
 import mouse
 import discord_webhook
 import trait_shard
+import result_color
 import shard_progress
 import manual_credits
 import stage_data
 import display_info
 import reset_clock
 import auto_update
-from window_lock import find_window, bring_to_front
+from window_lock import find_window, bring_to_front, is_foreground
 from ui import LauncherUI, ROBLOX_TITLE
 from mission_queue import Mission
 
-RESULT_TIMEOUT = 180.0   # how long a single match is allowed to run before we give up waiting
+RESULT_TIMEOUT = 180.0   # how long a single match can run before giving up
 STEP_PAUSE = 2.0
 
-# Speeds up every click in the Play-through-Start navigation sequence.
-# The default click timing (mouse.py) assumes a button might need a
-# hover-animation to finish before it registers - true for some Roblox
-# UI (confirmed: Create Room needs this, breaking the sequence when
-# rushed too hard). This is a modest speedup over the default (0.45s /
-# 0.15s), not an aggressive one - if a specific button still needs the
-# full default timing, it should get its own explicit override rather
-# than lowering these further for everything.
+# Any of these showing means the match has ended and the results screen
+# is up. Retry/Leave are checked first (cheaper, and immune to a level-up
+# toast covering the banner); victory_screen/defeat_screen back them up
+# for the reverse case - a toast covering Retry/Leave itself.
+RESULT_SCREEN_KEYS = ["retry_button", "leave_button", "victory_screen", "defeat_screen"]
+
+# Confirming Retry/Leave used to search the ENTIRE virtual screen at
+# full resolution (~700ms per icon checked) - restricting it to just
+# Roblox's window and shrinking the search frame (like trait_shard.py's
+# scan) cuts that to well under 200ms, so the results screen (and the
+# shard reward on it) gets caught sooner instead of several seconds late.
+RESULT_DETECTION_DOWNSCALE = 0.6
+
+# Modest speedup over mouse.py's default click timing (0.45s/0.15s) for
+# the Play-through-Start sequence. Some buttons (Create Room) need a
+# hover animation to finish first, so don't lower these further - give
+# a specific button its own override instead.
 NAV_CLICK_PAUSE = 0.3
 NAV_MOVE_DURATION = 0.12
 WAIT_FOR_ROBLOX_INTERVAL = 1.5
 CHAPTER_SCROLL_AMOUNT = -150
 CHAPTER_MAX_SCROLLS = 25
 
-# Anti-idle: periodically nudge the mouse and click, then put it back
-# exactly where it was, purely so the game doesn't consider the session
-# AFK during long unattended stretches. Only fires while nothing else is
-# actively running (see _anti_idle_loop) so it can't misclick mid-sequence.
-ANTI_IDLE_INTERVAL_SECONDS = 600  # 10 minutes
+# Keeps the game from treating a long unattended session as AFK - see
+# _anti_idle_loop for how the two modes below are chosen.
+ANTI_IDLE_INTERVAL_SECONDS = 600  # 10 minutes, while idle (no task running)
 ANTI_IDLE_JITTER_OFFSET = (12, 12)
+ANTI_IDLE_IN_GAME_INTERVAL_SECONDS = 30  # 30 seconds, while a task IS running
 
-# Worlds beyond the first 5 aren't visible without scrolling the world
-# list first - same idea as chapters 8-10. Ice Continent is the last one
-# reliably visible before any scrolling, so it's used as the hover anchor.
+# Worlds past the first 5 need the world list scrolled first - Ice
+# Continent is the last one visible before scrolling, used as the hover anchor.
 WORLDS_NEEDING_SCROLL = {"infinity_train"}
 WORLD_LIST_HOVER_ANCHOR = "world_ice_continent"
 
@@ -102,6 +105,12 @@ class LauncherApp:
 
         self.ui = LauncherUI(root, on_start_stop=self.on_go_or_stop, on_end_task=self.on_end_task,
                               on_close=self.on_close)
+
+        # Must run before anything else touches shard progress - otherwise
+        # manual_credits below could get wiped by a reset that hasn't
+        # been processed yet.
+        self._check_shard_reset()
+
         self._register_hotkeys()
 
         display_info.check_scaling(log=self.ui.log)
@@ -135,25 +144,45 @@ class LauncherApp:
             time.sleep(WAIT_FOR_ROBLOX_INTERVAL)
 
     def _anti_idle_loop(self):
-        """Starts running the first time Start is pressed (not at app
-        launch) and then keeps going for the rest of the session. Every
-        ANTI_IDLE_INTERVAL_SECONDS, if nothing else is currently running
-        (self.running is False - so this never fires mid-mission), nudges
-        the mouse a few pixels, clicks, and puts the cursor back exactly
-        where it was. Purely to stop the game from treating a long
-        unattended stretch (between queued runs, or after the queue
-        finishes) as AFK."""
+        """Keeps the game from treating a long unattended session as AFK -
+        opt-in via the "Anti-idle" checkbox in Settings (off by default;
+        the in-game Space-jump can interfere with trait shard stages).
+        Two modes when enabled, picked fresh each cycle based on
+        self.running:
+
+          - Task running: presses Space (a jump) every
+            ANTI_IDLE_IN_GAME_INTERVAL_SECONDS. A jump is harmless mid-
+            automation - unlike a mouse click, it can't land on and
+            misclick some game UI the automation is mid-sequence with.
+          - Idle (no task running): nudges the mouse and clicks every
+            ANTI_IDLE_INTERVAL_SECONDS instead, same as before - safe
+            here since there's no automation in progress to disrupt.
+
+        Starts on first Start press, runs for the session."""
         while not self._closing:
-            # Sleep in short increments so app close / a Start click don't
-            # have to wait out a full 10-minute sleep to be noticed.
+            if not self.ui.is_anti_idle_enabled():
+                time.sleep(2.0)
+                continue
+
+            running_now = self.running
+            interval = ANTI_IDLE_IN_GAME_INTERVAL_SECONDS if running_now else ANTI_IDLE_INTERVAL_SECONDS
+
+            # Sleep in short increments so app close/a running-state
+            # change doesn't wait out the full interval to be noticed -
+            # if self.running flips mid-wait, bail out and re-pick the
+            # interval/action for the new state instead of finishing the
+            # old one.
             slept = 0.0
-            while slept < ANTI_IDLE_INTERVAL_SECONDS:
+            mode_changed = False
+            while slept < interval:
                 if self._closing:
                     return
                 time.sleep(0.5)
                 slept += 0.5
-
-            if self._closing or self.running:
+                if self.running != running_now:
+                    mode_changed = True
+                    break
+            if mode_changed:
                 continue
 
             try:
@@ -161,22 +190,50 @@ class LauncherApp:
                 if hwnd is None:
                     continue
                 bring_to_front(hwnd)
-                time.sleep(0.15)
-                if self.running:
-                    continue  # a mission started during that brief focus wait - bail out
-                self.ui.log("Anti-idle: nudging the mouse to prevent an AFK kick.", "info")
-                mouse.jitter_and_click(offset=ANTI_IDLE_JITTER_OFFSET)
+                time.sleep(0.3)
+                if self.running != running_now:
+                    continue  # running-state flipped during that brief focus wait - bail out
+
+                if running_now:
+                    # find_window does a loose substring match over every
+                    # open window - if some OTHER window's title happens
+                    # to contain "Roblox" (a browser tab, another app),
+                    # bring_to_front could have focused THAT instead, and
+                    # Space would silently go there rather than the game.
+                    # Confirming focus actually landed on Roblox before
+                    # sending is what makes this catch that instead of
+                    # jumping nowhere.
+                    if not is_foreground(ROBLOX_TITLE):
+                        self.ui.log("Anti-idle: Roblox didn't come to the foreground - "
+                                    "skipping this Space press.", "warning")
+                        continue
+                    self.ui.log("Anti-idle: pressing Space to prevent an AFK kick.", "info")
+                    keyboard.send("space")
+                else:
+                    self.ui.log("Anti-idle: nudging the mouse to prevent an AFK kick.", "info")
+                    mouse.jitter_and_click(offset=ANTI_IDLE_JITTER_OFFSET)
             except Exception as e:
                 self.ui.log(f"Anti-idle nudge failed (non-fatal): {e}", "warning")
 
+    def _check_shard_reset(self):
+        """Compares the most recent official 5pm-Pacific reset boundary
+        against the saved marker - if the marker's older, clears all
+        banked progress and updates it. If they already match (already
+        processed, including across multiple relaunches the same day),
+        does nothing. See reset_clock.check_and_consume_reset()."""
+        try:
+            if reset_clock.check_and_consume_reset():
+                shard_progress.clear_all()
+                self.ui.log("Daily Trait Shard reset detected (5pm Pacific) - all banked "
+                            "progress has been cleared.", "warning")
+        except Exception as e:
+            self.ui.log(f"Shard reset check failed (non-fatal): {e}", "warning")
+
     def _shard_reset_loop(self):
-        """Runs for the lifetime of the app, checking every 30 seconds
-        whether the daily 5pm-Pacific Trait Shard reset boundary has
-        just passed. Fires at most once per actual reset - see
-        reset_clock.check_and_consume_reset(). Safe to run even while a
-        farm is active; the check itself is cheap and clearing progress
-        mid-farm just means the next run's count starts the new day's
-        tally, which is correct behavior right at a real reset."""
+        """Re-checks every 30s so a reset boundary crossed WHILE the app
+        stays open still gets caught - the first, startup-time check
+        already happened synchronously in __init__ (see
+        _check_shard_reset)."""
         while not self._closing:
             slept = 0.0
             while slept < 30.0:
@@ -184,14 +241,7 @@ class LauncherApp:
                     return
                 time.sleep(0.5)
                 slept += 0.5
-
-            try:
-                if reset_clock.check_and_consume_reset():
-                    shard_progress.clear_all()
-                    self.ui.log("Daily Trait Shard reset detected (5pm Pacific) - all banked "
-                                "progress has been cleared.", "warning")
-            except Exception as e:
-                self.ui.log(f"Shard reset check failed (non-fatal): {e}", "warning")
+            self._check_shard_reset()
 
     def on_close(self):
         self.stop_requested = True
@@ -205,9 +255,8 @@ class LauncherApp:
     # ---------- Auto-update ----------
 
     def _on_update_found(self, version, download_url):
-        """Called from the background check thread the moment a newer
-        release is found - hops to the main thread before touching any
-        UI (the messagebox prompt, then the download itself)."""
+        """Called from the background check thread - hops to the main
+        thread before touching any UI."""
         self.root.after(0, lambda: self._prompt_update(version, download_url))
 
     def _prompt_update(self, version, download_url):
@@ -223,11 +272,9 @@ class LauncherApp:
         threading.Thread(target=self._download_and_apply_update, args=(download_url,), daemon=True).start()
 
     def _download_and_apply_update(self, download_url):
-        """Runs on a background thread so the download itself can't
-        freeze the UI. Only hops back to the main thread once the
-        download has actually finished, to launch the swap script and
-        shut the app down cleanly - that's what lets this process fully
-        exit so the script's wait-for-exit loop can proceed."""
+        """Runs on a background thread so downloading can't freeze the
+        UI; hops back to the main thread once done to launch the swap
+        script and shut down."""
         try:
             new_exe_path = auto_update.download_update(download_url, log=self.ui.log)
         except Exception as e:
@@ -273,13 +320,9 @@ class LauncherApp:
         threading.Thread(target=self.run_queue, daemon=True).start()
 
     def _log_debug(self, text, level=None):
-        """Same as self.ui.log, but only actually shows up if Verbose
-        Logging is turned on (Settings popup) - used for routine
-        step-by-step navigation chatter ('Looking for Play button...',
-        'Selecting world: gt_city', etc.) that's useful when debugging
-        but clutters the log during normal use. Results, errors, and
-        milestones always use self.ui.log directly regardless of this
-        setting."""
+        """Same as self.ui.log, but only shows if Verbose Logging is on -
+        for routine step-by-step chatter. Results/errors/milestones
+        always use self.ui.log directly."""
         if self.ui.is_verbose_enabled():
             self.ui.log(text, level)
 
@@ -290,11 +333,9 @@ class LauncherApp:
         return False
 
     def on_end_task(self):
-        """Handler for the 'End Current Task' button/hotkey - unlike
-        Stop, this doesn't pause the whole queue or preserve the current
-        task for resuming. It just wraps up the CURRENT task right now
-        (as if its target/repeat_count had been reached) and moves on to
-        whatever's next in the queue, without stopping automation."""
+        """'End Current Task' - unlike Stop, doesn't pause the queue.
+        Wraps up the current task now (as if its target was reached) and
+        moves on to the next one."""
         if not self.running:
             self.ui.log("Nothing is running right now.", "warning")
             return
@@ -308,13 +349,9 @@ class LauncherApp:
         return False
 
     def _confirm_lobby(self, timeout):
-        """Checks whether we're back at the main menu/lobby. Normally
-        this just means 'menu_play' matched - but if the optional
-        'lobby_screen' landmark has also been captured, either one
-        matching counts, so a single borderline/missed detection on one
-        icon can't be mistaken for 'not actually at the lobby' as long
-        as the other confirms it. Silently skips lobby_screen if it was
-        never captured (it's optional) rather than erroring."""
+        """Checks we're back at the lobby - 'menu_play', or also
+        'lobby_screen' if that optional landmark's been captured, so one
+        borderline detection doesn't read as 'not at the lobby'."""
         keys = ["menu_play"]
         try:
             screen._load_template("lobby_screen")
@@ -344,10 +381,8 @@ class LauncherApp:
         return False
 
     def _maybe_send_discord_screenshot(self, message):
-        """Fires a Roblox-only screenshot to the configured Discord
-        webhook, if the user's turned that on and set a URL. Silently
-        does nothing otherwise - this should never block or fail a
-        mission just because Discord isn't configured."""
+        """Fires a Roblox-only screenshot to Discord if that's turned on
+        and a URL is set; otherwise does nothing."""
         if not self.ui.is_discord_result_notify_enabled():
             return
         url = self.ui.get_discord_webhook_url()
@@ -384,11 +419,9 @@ class LauncherApp:
     # ---------- Navigation sequence ----------
 
     def run_queue(self):
-        """Pulls missions off the queue one at a time. Each mission gets
-        entered, repeated up to its own repeat_count (counting each
-        victory/defeat result), then we leave to the lobby and move on
-        to the next queued mission. Stops early (leaving remaining
-        missions untouched in the queue) if the user hits Stop."""
+        """Pulls missions off the queue one at a time, running each to
+        completion before moving to the next. Stops early (leaving the
+        rest untouched) if the user hits Stop."""
         queue = self.ui.get_queue()
         missions_snapshot = queue.all()
         self._total_tasks = len(missions_snapshot)
@@ -400,16 +433,26 @@ class LauncherApp:
                     return
                 self._task_index += 1
                 mission = queue.pop_next()
+                # Popping removes it from the queue immediately, so
+                # queue.total_runs() alone would drop this mission's
+                # whole repeat_count from TOTAL RUNS right now, before
+                # any of its runs have actually happened - this tells
+                # the UI to keep counting it until each run completes
+                # (see _run_fixed_repeats/_farm_shards, which report
+                # progress as they go via update_mission_progress).
+                self.root.after(0, lambda rc=mission.repeat_count: self.ui.start_mission_progress(rc))
                 self.root.after(0, self.ui._refresh_queue_listbox)
                 self.root.after(0, lambda ti=self._task_index, tt=self._total_tasks:
                                  self.ui.set_status_line(f"Running Task {ti} / {tt}"))
                 self.root.after(0, lambda lbl=mission.label(): self.ui.set_current_task_label(lbl))
                 if not self._run_mission(mission):
-                    # Whether this was a deliberate Stop or a hard failure
-                    # (like never confirming the lobby after Leave), push
-                    # the mission back so nothing is silently lost from
-                    # the queue - Start (F6) resumes with it either way.
+                    # Deliberate Stop or hard failure either way - push
+                    # back so nothing's lost; Start (F6) resumes it. Reset
+                    # BEFORE refreshing so the full repeat_count is
+                    # counted from the queue again, not double-counted
+                    # on top of it.
                     queue.push_front(mission)
+                    self.root.after(0, self.ui.end_mission_progress)
                     self.root.after(0, self.ui._refresh_queue_listbox)
                     if self.stop_requested:
                         self.root.after(0, lambda lbl=mission.label():
@@ -418,6 +461,7 @@ class LauncherApp:
                         self.root.after(0, lambda lbl=mission.label():
                                          self.ui.set_current_task_label(f"Stopped on error: {lbl}"))
                     return
+                self.root.after(0, self.ui.end_mission_progress)
             self.root.after(0, lambda: self.ui.set_status_line("Queue finished."))
             self.root.after(0, lambda: self.ui.set_current_task_label("Nothing running - queue finished."))
         finally:
@@ -426,23 +470,17 @@ class LauncherApp:
             self.root.after(0, lambda: self.ui.set_running_state(False))
 
     def _run_mission(self, mission: Mission):
-        """Runs one queued mission - either a fixed number of repeats, or
-        (if mission.shard_target is set) farmed until enough trait
-        shards have dropped. Either way this is done WITHOUT leaving the
-        room in between individual runs - the result screen auto-
-        replays the same map, so Leave is only ever clicked once, right
-        before moving on to the next queued mission. Returns False on
-        abort/stop/failure."""
+        """Runs one mission - a fixed number of repeats, or (if
+        shard_target is set) farmed until enough shards drop. The result
+        screen auto-replays the map, so Leave is only clicked once, right
+        before the next mission. Returns False on abort/stop/failure."""
         label = mission.label()
 
         if mission.shard_farming and mission.shard_target is not None:
             already_banked = shard_progress.get_progress(mission)
             if already_banked >= mission.shard_target:
-                # Already met (e.g. the user manually banked enough via
-                # Settings) - skip this ENTIRELY, no navigation at all.
-                # Checking this before _enter_mission matters: otherwise
-                # this would only be noticed after already starting a
-                # live match, with nowhere sensible to click Leave yet.
+                # Already met (e.g. manually banked via Settings) - skip
+                # entirely, before starting a live match with nowhere to click Leave.
                 self.ui.log(f"Skipping '{label}' - already have {already_banked} shard(s) banked, "
                             f"meeting or exceeding the {mission.shard_target} target.", "success")
                 shard_progress.clear_progress(mission)
@@ -457,6 +495,45 @@ class LauncherApp:
             return self._farm_shards(mission)
         return self._run_fixed_repeats(mission, label)
 
+    def _detect_outcome(self):
+        """Runs color detection on the results screen's banner region
+        (green = victory, red = defeat) to determine the outcome - this
+        only happens AFTER the results screen is already confirmed up via
+        Retry/Leave (see _wait_for_result_screen), and is independent of
+        the trait shard scan (which runs regardless of what this
+        returns). Logs and returns "VICTORY", "DEFEAT", or "UNKNOWN" if
+        the color scan can't confidently tell which one it is."""
+        outcome = result_color.detect_result_color(self.ui.get_roblox_bbox(), log=self.ui.log)
+        label = outcome.upper()
+        level = "success" if label == "VICTORY" else "warning"
+        self.ui.log(f"Result: {label}", level)
+        return label
+
+    def _wait_for_result_screen(self, timeout=RESULT_TIMEOUT, poll_pause=0.2):
+        """Polls for the results screen via Retry/Leave OR the Victory/
+        Defeat banner icon - any one showing is enough to confirm it's
+        up. Deliberately icon-matching only, never color detection - see
+        result_color.py's docstring for why that's kept out of this
+        role. A game notification toast (e.g. "Upgraded X to upgrade
+        Y!") can render directly over the Retry/Leave buttons and blank
+        them out for a stretch, which was observed to time out this
+        whole wait (and abort the mission) when Retry/Leave were the
+        only signal - the banner sits in a different part of the screen
+        and isn't affected, so it backs the buttons up here (and vice
+        versa)."""
+        start = time.time()
+        bbox = self.ui.get_roblox_bbox()
+        while time.time() - start < timeout:
+            if self._check_stop():
+                return None
+            for key in RESULT_SCREEN_KEYS:
+                if nav.on_screen(key, region=bbox, downscale=RESULT_DETECTION_DOWNSCALE):
+                    return key
+            time.sleep(poll_pause)
+        self.ui.log(f"Never saw the results screen (Retry/Leave/banner) within {timeout:.0f}s - "
+                    f"the match may still be running longer than expected, or something's stuck.", "warning")
+        return None
+
     def _run_fixed_repeats(self, mission: Mission, label: str):
         unlimited = mission.repeat_count is None
         run_number = 0
@@ -467,24 +544,30 @@ class LauncherApp:
                 return False
 
             run_label = f"{run_number}/{mission.repeat_count}" if not unlimited else f"{run_number} (no limit)"
-            self._log_debug(f"In match ({run_label}) - waiting for victory or defeat...")
-            result_key = nav.wait_for_any_screen(
-                ["victory_screen", "defeat_screen"],
-                timeout=RESULT_TIMEOUT, log=self.ui.log, stop_check=self._check_stop,
-            )
+            self._log_debug(f"In match ({run_label}) - waiting for the results screen...")
+            result_key = self._wait_for_result_screen()
             if self._check_stop():
                 return False
             if result_key is None:
-                self.ui.log("Never saw a victory/defeat screen - aborting this mission.", "error")
+                self.ui.log("Aborting this mission.", "error")
                 return False
 
-            outcome = "VICTORY" if result_key == "victory_screen" else "DEFEAT"
-            self.ui.log(f"Result: {outcome}", "success" if outcome == "VICTORY" else "warning")
-            self._maybe_send_discord_screenshot(f"{outcome} - {label} (run {run_label})")
+            # Sent immediately on results-screen confirmation, before
+            # outcome detection - the screenshot itself doesn't need the
+            # outcome to already be known (the banner's right there in
+            # the captured frame either way), and this is the earliest
+            # point the result screen is guaranteed to be up.
+            self._maybe_send_discord_screenshot(f"Result screen - {label} (run {run_label})")
+
+            try:
+                self._detect_outcome()
+            except Exception as e:
+                self.ui.log(f"Result color detection failed (non-fatal): {e}", "warning")
 
             if not unlimited:
                 self.root.after(0, lambda rn=run_number, rc=mission.repeat_count:
                                  self.ui.set_run_progress(rn, rc))
+                self.root.after(0, lambda rn=run_number: self.ui.update_mission_progress(rn))
             else:
                 self.root.after(0, lambda rn=run_number: self.ui.set_run_progress(rn, "∞"))
 
@@ -499,13 +582,10 @@ class LauncherApp:
         return True
 
     def _farm_shards(self, mission: Mission):
-        """Auto-replays the same map, reading the trait shard count off
-        each result screen and accumulating it. Stops once the running
-        total reaches (or slightly passes) mission.shard_target - or, if
-        shard_target is None, keeps farming with no numeric target at
-        all. Either way, repeat_count (if set) acts as a safety cap on
-        max attempts; if repeat_count is also None, this only ever stops
-        via the Stop button."""
+        """Auto-replays the map, reading and accumulating the shard
+        count off each result screen. Stops once the total reaches
+        shard_target (or never, if None - farms until Stop).
+        repeat_count, if set, is a safety cap on max attempts."""
         total_shards = shard_progress.get_progress(mission)
         run_number = 0
         has_target = mission.shard_target is not None
@@ -524,52 +604,52 @@ class LauncherApp:
                 return False
 
             cap_label = f"/{mission.repeat_count} max" if has_run_cap else ""
-            self._log_debug(f"In match ({run_number}{cap_label}) - waiting for victory or defeat...")
-            result_key = nav.wait_for_any_screen(
-                ["victory_screen", "defeat_screen"],
-                timeout=RESULT_TIMEOUT, log=self.ui.log, stop_check=self._check_stop,
-            )
+            self._log_debug(f"In match ({run_number}{cap_label}) - waiting for the results screen...")
+            result_key = self._wait_for_result_screen()
             if self._check_stop():
                 return False
             if result_key is None:
-                self.ui.log("Never saw a victory/defeat screen - aborting this mission.", "error")
+                self.ui.log("Aborting this mission.", "error")
                 return False
 
-            outcome = "VICTORY" if result_key == "victory_screen" else "DEFEAT"
-            self.ui.log(f"Result: {outcome}", "success" if outcome == "VICTORY" else "warning")
+            self.ui.log("Result screen detected.", "success")
 
-            # Read the shard count FIRST, before anything else - the
-            # reward badge can be transient (the game may auto-advance or
-            # animate it away), so this has to happen the instant the
-            # result screen is confirmed showing. wait_for_any_screen
-            # just proved Roblox is visible RIGHT NOW via a real screen
-            # capture, so there's nothing to refocus here - a refocus
-            # (with its own 0.15s sleep) used to run first for no benefit,
-            # and _replay_or_leave() below refocuses again anyway before
-            # it needs to click anything.
+            # Sent immediately on results-screen confirmation, before
+            # outcome detection or the shard scan - the screenshot itself
+            # doesn't need the outcome to already be known (the banner's
+            # right there in the captured frame either way), and this is
+            # the earliest point the result screen is guaranteed to be up.
+            self._maybe_send_discord_screenshot(f"Result screen - {mission.label()} (run {run_number})")
+
+            # Color detection determines VICTORY/DEFEAT, but must never
+            # block or skip the shard scan below - wrapped so a failure
+            # here (or an "unknown" result) can't prevent shards from
+            # still being read.
             try:
-                shard_count = trait_shard.read_shard_count(log=self.ui.log)
+                self._detect_outcome()
+            except Exception as e:
+                self.ui.log(f"Result color detection failed (non-fatal): {e}", "warning")
+
+            # Read the shard count - independent of the outcome above.
+            # Searches the whole Roblox window and polls for a few
+            # seconds internally to give the reward's pop-in animation
+            # time to settle (see trait_shard.read_shard_count).
+            try:
+                shard_count = trait_shard.read_shard_count(log=self.ui.log, region=self.ui.get_roblox_bbox())
             except FileNotFoundError as e:
                 self.ui.log(f"Can't read trait shards: {e}", "error")
                 return False
             if shard_count is None:
-                self.ui.log("Couldn't read a shard count this run - assuming 0.", "warning")
                 shard_count = 0
             total_shards += shard_count
             shard_progress.set_progress(mission, total_shards)
             target_label = f"/{mission.shard_target}" if has_target else ""
             self.ui.log(f"Trait shards this run: {shard_count}  (total: {total_shards}{target_label})")
 
-            # mission.label() bakes in the CURRENT banked/target count (it
-            # reads shard_progress fresh every call) - calling it here,
-            # AFTER shard_progress.set_progress() just above, is what
-            # actually reflects this run's result. The old code reused a
-            # single `label` string computed once before the whole
-            # farming loop started, so every message (Discord included)
-            # kept showing the STARTING count (e.g. "0/30") no matter how
-            # many runs or shards actually happened.
+            # mission.label() reads shard_progress fresh every call -
+            # must be called AFTER set_progress() above so it reflects
+            # this run's result, not a stale count from before the loop started.
             current_label = mission.label()
-            self._maybe_send_discord_screenshot(f"{outcome} - {current_label} (run {run_number})")
             if shard_count > 0:
                 self._maybe_send_discord_shard_drop(
                     f"+{shard_count} Trait Shard{'s' if shard_count != 1 else ''} - {current_label}")
@@ -579,6 +659,8 @@ class LauncherApp:
                 self.root.after(0, lambda c=total_shards, t=mission.shard_target: self.ui.set_run_progress(c, t))
             else:
                 self.root.after(0, lambda c=total_shards: self.ui.set_run_progress(c, "∞"))
+            if has_run_cap:
+                self.root.after(0, lambda rn=run_number: self.ui.update_mission_progress(rn))
 
             target_reached = has_target and total_shards >= mission.shard_target
             about_to_hit_cap = has_run_cap and run_number >= mission.repeat_count
@@ -591,10 +673,9 @@ class LauncherApp:
                             f"resumes from here next time.", "warning")
                 break
 
-        # Captured BEFORE clear_progress() below - that call resets the
-        # banked count back to 0 once the target's been hit, so calling
-        # mission.label() any later would show "0/target" right in the
-        # completion message for the mission that just HIT its target.
+        # Captured BEFORE clear_progress() below, which resets banked
+        # count to 0 - calling mission.label() after that would show
+        # "0/target" in the very message announcing the target was hit.
         final_label = mission.label()
         if has_target and total_shards < mission.shard_target:
             self.ui.log(f"Hit the {mission.repeat_count}-run safety cap before reaching "
@@ -606,16 +687,15 @@ class LauncherApp:
         return True
 
     def _replay_or_leave(self, is_last_run: bool):
-        """Shared tail end of a single run: either let the game
-        auto-replay (waiting for the current result screen to clear
-        first so it can't be double-counted), or click Leave and confirm
-        we're back at the lobby. Returns False on stop/failure."""
+        """Tail end of a single run: either let the game auto-replay
+        (waiting for the result screen to clear first, so it can't be
+        double-counted), or click Leave and confirm we're at the lobby."""
         self._refocus_roblox()
         if not is_last_run:
             self._log_debug("Target not reached yet - game will auto-replay, waiting for it to restart...")
             nav.wait_until_gone(
-                ["victory_screen", "defeat_screen"],
-                timeout=15.0, log=self.ui.log, stop_check=self._check_stop,
+                RESULT_SCREEN_KEYS, timeout=15.0, log=self.ui.log, stop_check=self._check_stop,
+                region=self.ui.get_roblox_bbox(), downscale=RESULT_DETECTION_DOWNSCALE,
             )
             if self._check_stop():
                 return False
@@ -623,56 +703,45 @@ class LauncherApp:
                 return False
         else:
             self._log_debug("Target reached - clicking Leave to return to the lobby...")
-            for attempt in range(3):
+            leave_confirm_attempts = 5
+            for attempt in range(leave_confirm_attempts):
                 if self._check_stop():
                     return False
                 if not self._click_leave():
                     return False
-                # Fast confirm on every attempt - Leave is racing the
-                # game's own auto-replay timer, so this should never slow
-                # down. The retry COUNT (not a longer per-attempt wait) is
-                # what protects against one missed detection ending the
-                # whole farm.
+                # Fast confirm every attempt - Leave races auto-replay,
+                # so retry COUNT (not a longer wait) is what protects
+                # against one missed detection.
                 if self._confirm_lobby(timeout=3.0):
                     break
-                if attempt < 2:
+                if attempt < leave_confirm_attempts - 1:
                     self.ui.log("Not confirmed at the lobby yet after Leave - trying again "
-                                f"({attempt + 2}/3)...", "warning")
+                                f"({attempt + 2}/{leave_confirm_attempts})...", "warning")
                 else:
-                    self.ui.log("Still couldn't confirm the lobby after 3 attempts - pausing here. "
-                                "This task is preserved in the queue - press Start (F6) to retry it "
-                                "once you've checked what's on screen.", "error")
+                    self.ui.log(f"Still couldn't confirm the lobby after {leave_confirm_attempts} attempts - "
+                                "pausing here. This task is preserved in the queue - press Start (F6) to "
+                                "retry it once you've checked what's on screen.", "error")
                     return False
             if self._sleep_interruptible(STEP_PAUSE):
                 return False
         return True
 
     def _click_leave(self, retries=4, retry_pause=0.5):
-        """Clicks Leave using plain icon detection - 'leave_button' is
-        captured the same normal way as every other button (via
-        capture_icons.py), so this works out of the box for anyone
-        using a shared asset_data.py, with no separate calibration step
-        needed. If something is covering the button and it can't be
-        seen right now, falls back to clicking several spots around its
-        last-known position (see use_cache_on_miss in game_navigator.py) -
-        and if THAT fails too, falls back to Settings > Return to Lobby,
-        which sits in a different part of the screen entirely."""
+        """Clicks Leave via icon detection. If covered, falls back to
+        clicking around its last-known position (use_cache_on_miss in
+        game_navigator.py); if that fails too, falls back to Settings >
+        Return to Lobby instead."""
         if nav.click_icon("leave_button", log=self._log_debug, stop_check=self._check_stop,
                           retries=retries, retry_pause=retry_pause,
                           click_pause=0.05, move_duration=0.06,
                           use_cache_on_miss=True, confirm_key="menu_play", confirm_timeout=3.0):
             return True
 
-        # click_icon can report failure here even though Leave was actually
-        # found and clicked - it just means 'menu_play' never matched within
-        # ITS OWN polling window (e.g. one slow transition). By this point
-        # click_icon has already spent up to retries * confirm_timeout (~12s)
-        # polling, so a slow-but-real transition may still be mid-flight -
-        # give it a real window here rather than a token check before
-        # assuming Leave never landed. Otherwise this runs Settings > Return
-        # to Lobby on top of an already-successful Leave, which clashes
-        # (clicking the gear icon over a screen that's already mid-transition,
-        # or already at the lobby).
+        # click_icon can report failure even if Leave actually landed - it
+        # just means 'menu_play' didn't match within ITS OWN polling
+        # window (a slow transition). Give it a real second check here
+        # instead of assuming Leave failed and clashing with Return to
+        # Lobby on top of an already-successful Leave.
         if self._confirm_lobby(timeout=10.0):
             self._log_debug("Already at the lobby - Leave must have landed despite the failed confirm.")
             return True
@@ -682,11 +751,9 @@ class LauncherApp:
         return self._click_return_to_lobby_via_settings()
 
     def _click_return_to_lobby_via_settings(self):
-        """Fallback path: open the gear/settings menu and click Return
-        to Lobby from inside it. Two clicks instead of one, but the
-        gear icon and this button live somewhere else on screen than
-        the result-screen reward row, so whatever covered Leave (a
-        scrolling banner, a toast) may not reach here at all."""
+        """Fallback: open Settings and click Return to Lobby from
+        inside it - lives elsewhere on screen than Leave, so whatever
+        covered Leave may not reach here."""
         self._log_debug("Opening Settings (gear icon)...")
         self._refocus_roblox()
         if not nav.click_icon("settings_gear", log=self._log_debug, stop_check=self._check_stop,
@@ -704,10 +771,9 @@ class LauncherApp:
         return True
 
     def _mode_confirm_icon(self, mission: Mission):
-        """Which icon should appear once the top-level mode button
-        (mode_story / mode_squadron / etc.) has actually been clicked -
-        used as click_icon's confirm_key so a slow-loading page doesn't
-        get mistaken for a successful click."""
+        """Icon that should appear once the mode button is actually
+        clicked - used as click_icon's confirm_key so a slow-loading
+        page isn't mistaken for a successful click."""
         if mission.mode in ("Story", "Squadron"):
             return "world_gt_city"
         if mission.mode == "Challenge":
@@ -722,11 +788,9 @@ class LauncherApp:
         return None
 
     def _enter_mission(self, mission: Mission):
-        """Navigates from the main menu all the way into a match for the
-        given mission (mode/world/chapter/difficulty as applicable),
-        ending with the Start button click. This is the same navigation
-        every run of a mission repeats, since each repeat starts back at
-        the lobby after the previous run's Leave click."""
+        """Navigates from the main menu into a match for this mission
+        (mode/world/chapter/difficulty), ending with Start. Repeats each
+        time, since every run starts back at the lobby after Leave."""
         try:
             self._refocus_roblox()
 
@@ -831,11 +895,8 @@ class LauncherApp:
                 challenge_icon = f"challenge_{mission.challenge_key}"
                 self._log_debug(f"Selecting challenge: {mission.challenge_key}")
                 self._refocus_roblox()
-                # A challenge with only one stage auto-selects it - clicking
-                # the challenge icon already lands there (that's what its
-                # confirm_key below checks for), so there's nothing left to
-                # click. Only challenges with 2+ stages need a separate
-                # stage click after this.
+                # A single-stage challenge auto-selects on the challenge
+                # click itself - only 2+ stage challenges need another click.
                 single_stage = (mission.challenge_stage is not None
                                  and len(stage_data.CHALLENGES[mission.challenge_key]["stages"]) == 1)
                 if mission.challenge_stage:
