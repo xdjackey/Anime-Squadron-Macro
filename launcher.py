@@ -924,6 +924,15 @@ class LauncherApp:
                     if self._sleep_interruptible(STEP_PAUSE):
                         return False
 
+                if mission.difficulty:
+                    self._log_debug(f"Selecting difficulty: {mission.difficulty}")
+                    self._refocus_roblox()
+                    if not nav.click_icon(f"diff_{mission.difficulty}", log=self._log_debug,
+                                          stop_check=self._check_stop, click_pause=NAV_CLICK_PAUSE, move_duration=NAV_MOVE_DURATION):
+                        return False
+                    if self._sleep_interruptible(STEP_PAUSE):
+                        return False
+
             elif mission.mode == "Raid":
                 raid_icon = f"raid_{mission.raid_key}"
                 self._log_debug(f"Selecting raid: {mission.raid_key}")

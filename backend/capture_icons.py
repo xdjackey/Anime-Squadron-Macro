@@ -124,6 +124,19 @@ ITEMS += [
     ("trait_shard_x2", "OPTIONAL: same as above but for a drop of 'x2'."),
 ]
 
+# Some challenge stages (see stage_icons in stage_data.py) reuse the same
+# chapter_N icon Story mode captures further down this list - dedupe by
+# key so the walkthrough doesn't ask for the same crop twice. Keeps each
+# key's FIRST position (so it's prompted for at the earliest point it's
+# needed) but its LAST description (the explicit chapter_N entries below
+# have the more precise "digit only" crop guidance that actually matters
+# for those icons - the challenge-context wording lacks it).
+_last_description = {}
+for _key, _desc in ITEMS:
+    _last_description[_key] = _desc
+_seen_keys = set()
+ITEMS = [(key, _last_description[key]) for key, _ in ITEMS if not (key in _seen_keys or _seen_keys.add(key))]
+
 
 def capture_one(key, description):
     """Show a full-screen snapshot, let the user drag-select a box, save it."""

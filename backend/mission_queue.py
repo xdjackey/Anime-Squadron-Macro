@@ -59,6 +59,8 @@ class Mission:
             base = f"Challenge | {challenge.get('display', self.challenge_key)}"
             if self.challenge_stage:
                 base += f" | {self.challenge_stage}"
+            if self.difficulty:
+                base += f" | {self.difficulty.capitalize()}"
         elif mode == "Raid":
             raid = stage_data.RAIDS.get(self.raid_key, {})
             base = f"Raid | {raid.get('display', self.raid_key)} | {self.raid_stage}"

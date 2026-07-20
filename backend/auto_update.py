@@ -21,7 +21,7 @@ import tempfile
 import threading
 import urllib.request
 
-CURRENT_VERSION = "1.6.9"
+CURRENT_VERSION = "1.7.0"
 REPO = "xdjackey/Anime-Squadron-Macro"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 ASSET_NAME = "AnimeSquadronMacro.exe"

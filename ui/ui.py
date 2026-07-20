@@ -966,8 +966,10 @@ class LauncherUI:
             if stage_data.CHALLENGES[challenge_key]["stages"] and not challenge_stage:
                 self.log("Pick a stage for this challenge first.", "error")
                 return None
+            has_difficulty = stage_data.CHALLENGES.get(challenge_key, {}).get("has_difficulty")
             return Mission(mode=mode, repeat_count=repeat_count,
                             challenge_key=challenge_key, challenge_stage=challenge_stage,
+                            difficulty=self.get_selected_difficulty() if has_difficulty else None,
                             shard_farming=shard_farming, shard_target=shard_target)
 
         if mode == "Raid":
@@ -1046,15 +1048,18 @@ class LauncherUI:
         added = 0
 
         for challenge_key, challenge in stage_data.CHALLENGES.items():
-            if not challenge["shard_stage"]:
-                continue
-            target = self.get_shard_target(f"challenge:{challenge_key}", challenge["shard_cap"])
-            self.queue.add(Mission(
-                mode="Challenge", repeat_count=None,
-                challenge_key=challenge_key, challenge_stage=challenge["shard_stage"],
-                shard_farming=True, shard_target=target,
-            ))
-            added += 1
+            # Challenges with a difficulty screen are farmed on Hard,
+            # same convention as raids below.
+            challenge_difficulty = "hard" if challenge.get("has_difficulty") else None
+            for stage_name, default_cap in challenge.get("shard_stages", {}).items():
+                settings_key = f"challenge:{challenge_key}:{stage_data.slugify(stage_name)}"
+                target = self.get_shard_target(settings_key, default_cap)
+                self.queue.add(Mission(
+                    mode="Challenge", repeat_count=None,
+                    challenge_key=challenge_key, challenge_stage=stage_name, difficulty=challenge_difficulty,
+                    shard_farming=True, shard_target=target,
+                ))
+                added += 1
 
         for raid_key, raid in stage_data.RAIDS.items():
             if not raid["shard_stage"]:
@@ -1246,7 +1251,6 @@ class LauncherUI:
             self.field2_var.set(challenge_displays[0])
             self.field3_label.configure(text="STAGE")
             show(self.field2_frame)
-            hide(self.diff_frame)
             self._refresh_challenge_stage_options()
 
         elif mode == "Raid":
@@ -1283,7 +1287,8 @@ class LauncherUI:
 
     def _refresh_challenge_stage_options(self):
         challenge_key = self._current_challenge_key()
-        stages = stage_data.CHALLENGES.get(challenge_key, {}).get("stages", [])
+        challenge = stage_data.CHALLENGES.get(challenge_key, {})
+        stages = challenge.get("stages", [])
         if stages:
             self.field3_box.configure(values=stages)
             self.field3_var.set(stages[0])
@@ -1291,6 +1296,11 @@ class LauncherUI:
         else:
             self.field3_frame.pack_forget()
             self.field3_var.set("")
+
+        if challenge.get("has_difficulty"):
+            self.diff_frame.pack(fill="x", before=self.runs_frame)
+        else:
+            self.diff_frame.pack_forget()
 
     def _refresh_chapter_options(self):
         world_key = self._current_world_key()

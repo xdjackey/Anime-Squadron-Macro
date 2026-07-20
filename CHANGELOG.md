@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.7.0
+
+### ✨ Added
+- 🌆 Ghoul City challenge - 2 stages (Chapter 1/Chapter 2), each with
+  Normal/Hard difficulty, both dropping Trait Shards (20/day cap each).
+
+### 🔧 Fixed
+- 🏆 Katakara Bridge and The Hero Hunter's single stage is now confirmed/
+  selected via the same "Chapter 1" icon Story mode uses, instead of a
+  stage-specific icon matching their old in-game names - the game
+  renamed both stages to "Chapter 1", which had silently broken
+  navigation into either challenge.
+
 ## v1.6.9
 
 ### ✨ Added

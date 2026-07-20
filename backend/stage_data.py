@@ -48,22 +48,37 @@ SQUADRON_CHAPTER_COUNTS = {
 }
 
 # ---- Challenge: some (Daily/Regular) have no stage selection - just
-# click and go. Others (Katakara Bridge, Hero Hunter) have one named
-# stage that drops Trait Shards. ----
+# click and go. Others have one or more stages that drop Trait Shards -
+# shard_stages maps each shard-dropping stage name to its daily cap.
+#
+# stage_icons: some challenges' stages don't get their own captured icon -
+# they show the exact same "Chapter N" badge Story mode uses, so this
+# redirects challenge_stage_icon_key() to the shared chapter_N icon
+# instead of a (nonexistent) challenge-specific one. Katakara Bridge and
+# Hero Hunter's single stage used to have its own distinct name/icon, but
+# the game renamed both to just "Chapter 1" - matching Ghoul City's two
+# stages, which were built the same way from the start.
 CHALLENGES = {
-    "daily_challenge": {"display": "Daily Challenge", "stages": [], "shard_stage": None, "shard_cap": None},
-    "regular_challenge": {"display": "Regular Challenge", "stages": [], "shard_stage": None, "shard_cap": None},
+    "daily_challenge": {"display": "Daily Challenge", "stages": [], "shard_stages": {}},
+    "regular_challenge": {"display": "Regular Challenge", "stages": [], "shard_stages": {}},
     "katakara_bridge": {
         "display": "Katakara Bridge",
-        "stages": ["A Dark Awakening"],
-        "shard_stage": "A Dark Awakening",
-        "shard_cap": 100,
+        "stages": ["Chapter 1"],
+        "shard_stages": {"Chapter 1": 100},
+        "stage_icons": {"Chapter 1": "chapter_1"},
     },
     "hero_hunter": {
         "display": "The Hero Hunter",
-        "stages": ["The Hero Hunter Awakens"],
-        "shard_stage": "The Hero Hunter Awakens",
-        "shard_cap": 30,  # caps at 30/day, unlike the other shard stages
+        "stages": ["Chapter 1"],
+        "shard_stages": {"Chapter 1": 30},  # caps at 30/day, unlike the other shard stages
+        "stage_icons": {"Chapter 1": "chapter_1"},
+    },
+    "ghoul_city": {
+        "display": "Ghoul City",
+        "stages": ["Chapter 1", "Chapter 2"],
+        "shard_stages": {"Chapter 1": 20, "Chapter 2": 20},
+        "stage_icons": {"Chapter 1": "chapter_1", "Chapter 2": "chapter_2"},
+        "has_difficulty": True,
     },
 }
 
@@ -126,13 +141,13 @@ def shard_target_rows():
     this to build one target + manual-progress field per stage."""
     rows = []
     for challenge_key, challenge in CHALLENGES.items():
-        if challenge["shard_stage"]:
+        for stage_name, cap in challenge.get("shard_stages", {}).items():
             progress_key = shard_stage_key("challenge", challenge_key=challenge_key,
-                                            challenge_stage=challenge["shard_stage"])
+                                            challenge_stage=stage_name)
             rows.append((
-                f"challenge:{challenge_key}",
-                f"{challenge['display']} ({challenge['shard_stage']})",
-                challenge["shard_cap"],
+                f"challenge:{challenge_key}:{slugify(stage_name)}",
+                f"{challenge['display']} ({stage_name})",
+                cap,
                 progress_key,
             ))
     for raid_key, raid in RAIDS.items():
@@ -160,6 +175,14 @@ def shard_target_rows():
 
 
 def challenge_stage_icon_key(challenge_key, stage_name):
+    """Icon key for confirming/clicking a challenge's stage. Most
+    challenges have their own dedicated icon, but some reuse the exact
+    "Chapter N" badge Story mode uses (see stage_icons in CHALLENGES) -
+    those redirect to the shared chapter_N icon instead of a
+    challenge-specific one that was never actually captured."""
+    override = CHALLENGES.get(challenge_key, {}).get("stage_icons", {}).get(stage_name)
+    if override:
+        return override
     return f"challenge_{challenge_key}_{slugify(stage_name)}"
 
 
@@ -180,9 +203,9 @@ def stage_drops_shards(mode, **kwargs):
         challenge_key = kwargs.get("challenge_key")
         stage_name = kwargs.get("stage_name")
         challenge = CHALLENGES.get(challenge_key)
-        if not challenge or challenge["shard_stage"] is None:
+        if not challenge:
             return False
-        return challenge["shard_stage"] == stage_name
+        return stage_name in challenge.get("shard_stages", {})
     if mode == "raid":
         raid_key = kwargs.get("raid_key")
         stage_name = kwargs.get("stage_name")
